@@ -6,6 +6,8 @@
 .env
 .env.*
 !.env.example
+/instance/
+/config.local.*
 
 # 数据库及附属文件
 *.db
@@ -18,6 +20,12 @@
 # Python 环境与缓存
 .venv/
 venv/
+env/
+.conda/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
