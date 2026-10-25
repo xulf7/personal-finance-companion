@@ -1,0 +1,23 @@
+# 本地背景资料与运行数据
+/library/
+/runtime/
+
+# 本地配置与密钥
+.env
+.env.*
+!.env.example
+
+# 数据库及附属文件
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Python 环境与缓存
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
