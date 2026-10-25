@@ -1,0 +1,17 @@
+:root { color-scheme: light; }
+body {
+  margin: 0;
+  background: #f5f7fa;
+  color: #202c3c;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  line-height: 1.75;
+}
+main { max-width: 850px; margin: 0 auto; padding: 40px 24px; }
+.eyebrow { color: #42637d; }
+h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); line-height: 1.25; }
+h2 { font-size: 1.25rem; }
+section { margin-top: 28px; padding: 20px 24px; background: white; border-radius: 10px; }
+dt { margin-top: 18px; font-weight: 650; }
+dd { margin: 6px 0 0; }
+a { color: #125d9c; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid #125d9c; outline-offset: 4px; }

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Personal Finance Companion</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">MIS2001 · 个人金融规划助手</p>
+    <h1>Personal Finance Companion</h1>
+    <p>结合当前财务档案、历史决策与市场数据，辅助持续的个人金融规划。</p>
+
+    <section aria-labelledby="stage-title">
+      <h2 id="stage-title">当前阶段：T01 工程基础</h2>
+      <p>已实现基础首页和健康检查。以下是后续模块的设计职责，尚未实现业务数据存储或处理。</p>
+      <p>聊天、档案编辑、记忆摘要、行情查询与目标 Dashboard 均待后续开发。</p>
+      <a href="{{ url_for('pages.health') }}">查看健康检查 /health</a>
+    </section>
+
+    <section aria-labelledby="modules-title">
+      <h2 id="modules-title">模块职责</h2>
+      <dl>
+        <dt>SP · 结构化财务档案</dt>
+        <dd>保存当前已确认的预算、持仓、目标和偏好，表示当前有效状态。</dd>
+        <dt>CA · 对话档案</dt>
+        <dd>保存原始聊天、会话摘要和历史重要决策概览 CA Overview，解释历史变化。</dd>
+        <dt>MD · 市场数据</dt>
+        <dd>保存经过规范化、有明确来源和时间的市场数据。</dd>
+      </dl>
+      <p>后续每轮默认提供精简 SP、CA Overview 和近期消息；详细历史与行情由后端工具按需读取。</p>
+      <p>当前技术路线使用本地 SQLite，不使用 RAG、Embedding 或向量数据库。</p>
+    </section>
+  </main>
+</body>
+</html>
