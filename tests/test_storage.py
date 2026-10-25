@@ -69,10 +69,11 @@ class InitializationTests(StorageCase):
         self.assertFalse(self.backups.exists())
 
     def test_reinitialize_preserves_data_and_connections_are_closed(self):
-        self.assertEqual(self.initialize(), {"version": 1, "backup": None})
+        latest = len(db.migration_files())
+        self.assertEqual(self.initialize(), {"version": latest, "backup": None})
         self.store.edit_profile(budget("500"), expected_version=0)
         session, message = self.user_message()
-        self.assertEqual(self.initialize(), {"version": 1, "backup": None})
+        self.assertEqual(self.initialize(), {"version": latest, "backup": None})
         reopened = Store(self.database)
         self.assertEqual(reopened.get_profile()["investment_budget"], "500.00")
         self.assertEqual(reopened.get_message(message["id"])["conversation_id"], session["id"])
@@ -120,15 +121,17 @@ class InitializationTests(StorageCase):
         self.initialize()
         directory = self.root / "crlf-migrations"
         directory.mkdir()
-        source = db.MIGRATIONS_DIR / "001_initial.sql"
-        (directory / source.name).write_bytes(source.read_text(encoding="utf-8").replace("\n", "\r\n").encode("utf-8"))
+        for source in db.migration_files():
+            (directory / source.name).write_bytes(source.read_text(encoding="utf-8").replace("\n", "\r\n").encode("utf-8"))
         self.assertIsNone(db.initialize(self.database, self.backups, migrations_dir=directory)["backup"])
 
     def migration_directory(self, sql):
         directory = self.root / "migrations"
         directory.mkdir()
-        shutil.copy2(db.MIGRATIONS_DIR / "001_initial.sql", directory / "001_initial.sql")
-        (directory / "002_test.sql").write_text(sql, encoding="utf-8", newline="\n")
+        files = db.migration_files()
+        for source in files:
+            shutil.copy2(source, directory / source.name)
+        (directory / f"{len(files)+1:03d}_test.sql").write_text(sql, encoding="utf-8", newline="\n")
         return directory
 
     def test_upgrade_has_valid_backup_and_keeps_existing_business_data(self):
@@ -136,10 +139,11 @@ class InitializationTests(StorageCase):
         self.store.edit_profile(budget("500"), expected_version=0)
         directory = self.migration_directory("ALTER TABLE profile ADD COLUMN note TEXT;\n")
         result = db.initialize(self.database, self.backups, migrations_dir=directory)
-        self.assertEqual(result["version"], 2)
+        latest = len(db.migration_files())
+        self.assertEqual(result["version"], latest + 1)
         with closing(sqlite3.connect(result["backup"])) as backup:
             self.assertEqual(backup.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], latest)
             self.assertEqual(backup.execute("SELECT investment_budget FROM profile").fetchone()[0], "500.00")
             self.assertNotIn("note", [r[1] for r in backup.execute("PRAGMA table_info(profile)")])
         with patch.object(db, "MIGRATIONS_DIR", directory):
@@ -159,8 +163,8 @@ class InitializationTests(StorageCase):
             db.initialize(self.database, self.backups, migrations_dir=directory)
         self.assertEqual(self.store.get_profile()["investment_budget"], "500.00")
         with db.connection(self.database) as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 1)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(db.migration_files()))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], len(db.migration_files()))
             self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name='partial_write'").fetchone())
         with closing(sqlite3.connect(next(self.backups.iterdir()))) as backup:
             self.assertEqual(backup.execute("PRAGMA integrity_check").fetchone()[0], "ok")

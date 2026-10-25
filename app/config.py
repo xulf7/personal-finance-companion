@@ -12,3 +12,4 @@ class Config:
     BACKUP_DIR = RUNTIME_DIR / "backups"
     TEST_DIR = RUNTIME_DIR / "tests"
     DATABASE_PATH = DATA_DIR / "app.sqlite3"
+    MD_CACHE_TTL_SECONDS = 300

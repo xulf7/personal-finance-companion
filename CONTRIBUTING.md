@@ -75,6 +75,8 @@ python -c "from urllib.request import urlopen; print(urlopen('http://127.0.0.1:5
 python -B -m unittest discover -s tests -v
 ```
 
+首次克隆或拉取包含数据库迁移的代码后，在使用业务服务前先执行 `python -m flask --app app:create_app init-db`；已有库会在需要升级时自动备份，不要删库重建。SP/CA 演示和模拟行情均须显式填充，Web 启动不会自动写入。首次上手、已有库升级、`md-refresh`/`md-show` 的完整步骤见 [README](README.md#模拟行情与已有库升级)，只改文档无需初始化数据库。
+
 首页和健康检查不需要 API 密钥或外网。用 `Ctrl+C` 停止；端口冲突时用 `python run.py --port 5001`，访问和检查时同样换端口。只改文档无需安装全部运行依赖；检查 Markdown、链接以及与实际代码一致的命令即可。更多路径与迁移说明见 [README](README.md)。
 
 不要提交真实密钥、`.env`、`config.local.*`、`library/` 背景资料或 `runtime/` 运行数据和数据库。新克隆的仓库不包含各成员自己的本地数据。需要共享测试样例时使用明确标注的合成数据，必要的迁移 SQL 和数据生成脚本可正常提交。
