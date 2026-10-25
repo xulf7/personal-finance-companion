@@ -10,9 +10,9 @@ MIS2001 小组项目：结合个人财务档案、历史决策与市场数据的
 
 后续每轮默认提供精简 SP、CA Overview 和近期消息；详细历史与行情由后端工具按需读取。当前方案不使用 RAG、Embedding 或向量数据库。
 
-**T01 已实现**：可启动的 Flask 应用、介绍页、`GET /health`、集中路径配置，以及基础功能和迁移测试。首页展示模块职责与实际开发阶段。
+**T01/T02 已实现**：Flask 首页和 `GET /health`；SP 当前档案、目标、持仓的 SQLite 持久化；会话、原始消息、版本化摘要及 CA Overview；财务变更候选的创建、确认和拒绝；显式初始化、版本化 SQL 迁移和虚构演示数据。业务能力通过 Python 服务提供。
 
-**尚未实现**：SP/CA/MD 业务表与数据库读写、模型与行情 API、摘要与工具调用、完整聊天界面、目标 Dashboard。当前不创建业务数据库，也不需要 API 密钥。
+**尚未实现**：业务 HTTP 接口与交互页面、模型与行情 API、自动摘要与模型工具调用、MD、完整聊天界面和目标 Dashboard。不需要 API 密钥；导入应用、启动、访问首页或 `/health` 均不自动创建或初始化业务数据库。
 
 ## 安装与运行
 
@@ -65,7 +65,30 @@ python (Join-Path $projectPath 'run.py')
 python -B -m unittest discover -s tests -v
 ```
 
-测试覆盖无密钥且禁止网络连接时的首页/健康接口、静态样式、集中路径，以及根目录、不同工作目录、迁移副本的真实本机 HTTP 启动。测试会在 `runtime/tests/` 下创建独立临时目录，复制最少的应用文件，检查副本使用自己的根目录与 runtime，结束后只清理该次临时目录。测试需要允许本机回环连接，不需要外网或模型/行情服务。
+测试覆盖无密钥且禁止网络连接时的首页/健康接口、原有不同工作目录与迁移副本的真实 HTTP 启动，以及文件数据库重连、重复初始化、消息与摘要来源、精确金额、候选状态/并发版本冲突/失败回滚、升级备份与迁移回滚、虚构数据幂等和携带数据库的整体迁移。
+
+所有测试使用 `runtime/tests/` 下独立临时目录和数据库，结束后仅清理该次临时文件，不访问实际开发数据库。测试需要允许本机回环连接，不需要外网或模型/行情服务。
+
+## 初始化与虚构演示
+
+在项目根目录显式执行（无需启动 Web 服务）：
+
+```powershell
+python -m flask --app app:create_app init-db
+python -m flask --app app:create_app seed-demo
+```
+
+`init-db` 首次创建 `runtime/data/app.sqlite3` 和版本 0 的空 SP（金额未知）；数据库结构当前为版本 1。重复执行不清库或覆盖数据。以后有待执行的迁移时，会先将已初始化数据库备份到 `runtime/backups/`，再在事务内升级；无待执行迁移时不备份。高于代码版本、未知表结构或迁移文件被改写时会明确报错并保留数据。尚未初始化时，Python 业务服务会提示先运行 `init-db`。详情见 [数据模型与迁移说明](docs/DATA_MODEL.md)。
+
+`seed-demo` 只填充明确标注的**虚构数据**：投资预算 CNY 500.00 → 用户提出 800.00 → 创建候选 → 明确确认后 SP 为 800.00；保留原始消息、旧预算摘要、修改原因、Overview，另有 1000.00 的待确认候选。摘要由代码明确写入，不是模型生成。
+
+重复执行演示命令不新增或覆盖数据；若数据库已有其他业务数据则拒绝填充。演示记录是本地开发数据，不会进入 Git，也不会在应用启动时自动产生。查看本地档案及候选状态：
+
+```powershell
+python -c "from pprint import pprint; from app.storage import Store; s=Store(); pprint(s.get_profile()); pprint(s.list_changes())"
+```
+
+业务入口为 `app.storage.Store`；在 Flask 相关代码中可用 `Store.from_app(app)` 读取应用配置。可选 `create_app(test_config)` 支持测试路径隔离；调用方应同时配置所需的 `DATABASE_PATH`、`RUNTIME_DIR`、`BACKUP_DIR` 等路径至项目内独立测试目录。服务签名、修改操作与异常类型见 [DATA_MODEL.md](docs/DATA_MODEL.md)。本轮不新增业务 HTTP 路由。
 
 ## 文件与运行数据
 
@@ -74,6 +97,11 @@ app/
   __init__.py        应用创建
   config.py          集中配置与路径
   routes.py          首页和健康检查
+  db.py              显式迁移、连接与事务
+  migrations/        纳入 Git 的版本化 SQL
+  storage.py         SP/CA 可复用服务
+  validation.py      有限修改结构与输入校验
+  demo.py / cli.py   虚构演示逻辑与显式命令
   templates/         HTML 模板
   static/            页面样式
 run.py               启动入口
@@ -87,13 +115,13 @@ runtime/             本地运行数据（Git 忽略）
 
 | 路径 | 用途 |
 | --- | --- |
-| `runtime/data/` | 未来本地数据库，暂定 `app.sqlite3` |
+| `runtime/data/` | 本地数据库 `app.sqlite3` |
 | `runtime/logs/` | 需要时产生的日志 |
 | `runtime/imports/` | 未来的实际导入数据 |
 | `runtime/backups/` | 未来的数据库备份 |
 | `runtime/tests/` | 测试临时文件与临时数据库 |
 
-目录按需创建；当前应用启动不创建上述目录或数据库，测试只创建所需测试目录。源码与持久化引用不得绑定用户名、盘符或本机绝对路径。
+目录按需创建；Web 启动不创建数据库，只有显式初始化命令创建业务库；测试只写独立测试目录。源码与持久化引用不得绑定用户名、盘符或本机绝对路径。
 
 `library/` 是各成员的本地背景资料，不修改或提交；`runtime/` 是各成员自己的运行数据；公开源码、测试、文档及依赖清单由 Git 管理。新克隆的仓库不含背景资料、运行数据或真实配置。
 
@@ -101,6 +129,6 @@ runtime/             本地运行数据（Git 忽略）
 
 ## 整体迁移与协作
 
-停止服务，将整个项目文件夹复制到新位置，在新环境检查 Python 并按需安装 `requirements.txt`，再执行启动和测试命令，无需修改路径。若要保留 Git 历史，复制时包含 `.git`；若未来需携带本地数据，应在服务停止后自行保管并复制 `runtime/`。私有资料和密钥单独安全传递，不通过公开仓库同步；Python 环境不随文件夹迁移，使用新机器自己的解释器。
+停止服务与其他数据库写入，将整个项目文件夹复制到新位置，在新环境检查 Python 并按需安装 `requirements.txt`，再执行启动和测试命令，无需修改路径。若要保留 Git 历史，复制时包含 `.git`；携带本地数据时包含 `runtime/`。数据库没有指向原目录的绝对路径，可在副本继续使用；若采用新克隆，则按需初始化新库，不会获得原机器的本地数据。私有资料和密钥单独安全传递，不通过公开仓库同步；Python 环境不随文件夹迁移，使用新机器自己的解释器。
 
 小组日常操作见 [小组 GitHub 协作指南](CONTRIBUTING.md)，以 VS Code 图形操作为主。
