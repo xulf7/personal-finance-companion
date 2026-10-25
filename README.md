@@ -10,9 +10,9 @@ MIS2001 小组项目：结合个人财务档案、历史决策与市场数据的
 
 后续每轮默认提供精简 SP、CA Overview 和近期消息；详细历史与行情由后端工具按需读取。当前方案不使用 RAG、Embedding 或向量数据库。
 
-**T01/T02 已实现**：Flask 首页和 `GET /health`；SP 当前档案、目标、持仓的 SQLite 持久化；会话、原始消息、版本化摘要及 CA Overview；财务变更候选的创建、确认和拒绝；显式初始化、版本化 SQL 迁移和虚构演示数据。业务能力通过 Python 服务提供。
+**T01–T03 已实现**：Flask 首页和 `GET /health`；SP 当前档案、目标、持仓；原始会话/消息、版本化摘要和 CA Overview；财务候选变更确认；SQLite 显式初始化、备份与版本迁移；有限虚构行情的规范化、提供器适配、缓存查询和刷新。业务能力通过 Python 服务与 CLI 提供。
 
-**尚未实现**：业务 HTTP 接口与交互页面、模型与行情 API、自动摘要与模型工具调用、MD、完整聊天界面和目标 Dashboard。不需要 API 密钥；导入应用、启动、访问首页或 `/health` 均不自动创建或初始化业务数据库。
+**尚未实现**：业务 HTTP 接口与交互页面、真实行情提供器、模型 API、自动摘要与模型工具调用、聊天界面和目标 Dashboard。目前仅有明确标注的固定虚构行情，不是实时数据。不需要密钥或外网；导入应用、启动、访问首页或 `/health` 均不访问提供器或连接/初始化业务数据库。
 
 ## 安装与运行
 
@@ -65,7 +65,7 @@ python (Join-Path $projectPath 'run.py')
 python -B -m unittest discover -s tests -v
 ```
 
-测试覆盖无密钥且禁止网络连接时的首页/健康接口、原有不同工作目录与迁移副本的真实 HTTP 启动，以及文件数据库重连、重复初始化、消息与摘要来源、精确金额、候选状态/并发版本冲突/失败回滚、升级备份与迁移回滚、虚构数据幂等和携带数据库的整体迁移。
+测试覆盖原有离线页面、不同工作目录启动、SP/CA 持久化和候选事务，以及 T02 结构版本 1→2 的完整数据保留、有效备份/失败回滚、三类模拟行情、精度/时间校验、缓存命中/过期/强刷/失败回退、来源隔离、并发覆盖保护和携库整体复制。
 
 所有测试使用 `runtime/tests/` 下独立临时目录和数据库，结束后仅清理该次临时文件，不访问实际开发数据库。测试需要允许本机回环连接，不需要外网或模型/行情服务。
 
@@ -78,7 +78,7 @@ python -m flask --app app:create_app init-db
 python -m flask --app app:create_app seed-demo
 ```
 
-`init-db` 首次创建 `runtime/data/app.sqlite3` 和版本 0 的空 SP（金额未知）；数据库结构当前为版本 1。重复执行不清库或覆盖数据。以后有待执行的迁移时，会先将已初始化数据库备份到 `runtime/backups/`，再在事务内升级；无待执行迁移时不备份。高于代码版本、未知表结构或迁移文件被改写时会明确报错并保留数据。尚未初始化时，Python 业务服务会提示先运行 `init-db`。详情见 [数据模型与迁移说明](docs/DATA_MODEL.md)。
+`init-db` 首次创建 `runtime/data/app.sqlite3` 和版本 0 的空 SP（金额未知）；当前数据库**结构版本为 2**。重复执行不清库或覆盖数据。升级已有版本 1 时，先在 `runtime/backups/` 生成有效备份，再执行 `002_market_data.sql`，只新增 MD 表，保留已有 SP/CA；无待执行迁移时不备份。高于代码版本、未知结构或已应用的迁移被改写时会报错并保留数据。尚未初始化或需要升级时，业务服务提示先执行 `init-db`。详情见 [数据模型与迁移说明](docs/DATA_MODEL.md)。
 
 `seed-demo` 只填充明确标注的**虚构数据**：投资预算 CNY 500.00 → 用户提出 800.00 → 创建候选 → 明确确认后 SP 为 800.00；保留原始消息、旧预算摘要、修改原因、Overview，另有 1000.00 的待确认候选。摘要由代码明确写入，不是模型生成。
 
@@ -90,6 +90,30 @@ python -c "from pprint import pprint; from app.storage import Store; s=Store(); 
 
 业务入口为 `app.storage.Store`；在 Flask 相关代码中可用 `Store.from_app(app)` 读取应用配置。可选 `create_app(test_config)` 支持测试路径隔离；调用方应同时配置所需的 `DATABASE_PATH`、`RUNTIME_DIR`、`BACKUP_DIR` 等路径至项目内独立测试目录。服务签名、修改操作与异常类型见 [DATA_MODEL.md](docs/DATA_MODEL.md)。本轮不新增业务 HTTP 路由。
 
+## 模拟行情与已有库升级
+
+首次使用可按上节初始化，按需生成 SP/CA 虚构演示，然后显式填充 MD。**已有 T02 开发库只需升级并刷新 MD，无需重新填充 SP/CA**：
+
+```powershell
+python -m flask --app app:create_app init-db
+python -m flask --app app:create_app md-refresh
+python -m flask --app app:create_app md-show
+```
+
+升级前停止其他数据库写入，保留命令输出中的备份路径；若升级失败，保留现场检查错误，不删库重建。`md-refresh` 强制获取三项固定虚构样例并逐项原子写入；`md-show` 只读已有缓存，不触发获取。两条命令均输出完整资产 ID、指标、数值、币种/单位、来源、模拟标记、数据时间、获取/过期时间及状态。新库未刷新时显示 `missing`，不会编造数值。
+
+| 虚构样例 | 完整资产 ID | 指标 / 单位 | 固定数据时间 |
+| --- | --- | --- | --- |
+| 虚构演示股票 | `demo:stock:DEMO_EXCHANGE:DEMO001` | `price` / CNY 每股 | 2026-01-15 07:00 UTC |
+| 虚构演示基金 | `demo:fund:DEMO_FUNDS:DEMO001` | `nav` / CNY 每份 | 2026-01-14，仅日期 |
+| 虚构演示指数 | `demo:index:DEMO_EXCHANGE:DEMO001` | `index_level` / 点，无币种 | 2026-01-15 07:00 UTC |
+
+仅支持上述完整标识与指标；相同短代码 `DEMO001` 不足以确定资产。提供器为 `mock-fixed-v1`，全部 `is_simulated=true`。刷新只改变获取/过期时间，不把固定样例时间改成当前时间。MD 数值保存八位小数，不影响 SP 的两位金额精度。
+
+Python 入口为 `app.md.MDService`，可用 `MDService.from_app(app)`。`list_assets()` 列出目录；`read_cache(asset_id, metric)` 只读；`query(...)` 优先命中有效缓存，否则获取；`refresh(...)` 或 `query(..., force_refresh=True)` 强刷。可注入提供器和带时区的时钟。
+
+默认有效期 `Config.MD_CACHE_TTL_SECONDS=300` 秒，可配置为 1–86400 秒整数，影响下次成功刷新写入的过期时间。`fetched_at <= 当前时间 < expires_at` 才算 `fresh`，到期时即为 `stale`。**缓存新鲜仅表示最近获取，不能证明数据时间新或行情实时。** 结果同时返回 `cache_status`、`refresh_status`、`error` 与完整数据时间/模拟标记。获取或校验失败保留旧记录，旧值可能为 `fresh` 或 `stale`，必须同时查看本次错误；没有缓存则 `data=None`。并发重叠刷新或更旧来源时间不会覆盖已保存的更新结果，详见数据模型说明。
+
 ## 文件与运行数据
 
 ```text
@@ -100,6 +124,8 @@ app/
   db.py              显式迁移、连接与事务
   migrations/        纳入 Git 的版本化 SQL
   storage.py         SP/CA 可复用服务
+  md.py              MD 规范化、缓存和刷新服务
+  md_provider.py     有限虚构资产目录与提供器协议
   validation.py      有限修改结构与输入校验
   demo.py / cli.py   虚构演示逻辑与显式命令
   templates/         HTML 模板
