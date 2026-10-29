@@ -1,7 +1,9 @@
 """Personal Finance Companion 应用工厂。"""
 
 from flask import Flask
+from werkzeug.exceptions import HTTPException
 
+from .api import api, http_error
 from .cli import register_cli
 from .config import Config
 from .routes import pages
@@ -14,5 +16,7 @@ def create_app(test_config=None):
         app.config.update(test_config)
         app.instance_path = str(app.config["RUNTIME_DIR"])
     app.register_blueprint(pages)
+    app.register_blueprint(api)
+    app.register_error_handler(HTTPException, http_error)
     register_cli(app)
     return app
