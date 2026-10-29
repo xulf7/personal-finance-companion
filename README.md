@@ -10,9 +10,9 @@ MIS2001 小组项目：结合个人财务档案、历史决策与市场数据的
 
 后续每轮默认提供精简 SP、CA Overview 和近期消息；详细历史与行情由后端工具按需读取。当前方案不使用 RAG、Embedding 或向量数据库。
 
-**T01–T03 已实现**：Flask 首页和 `GET /health`；SP 当前档案、目标、持仓；原始会话/消息、版本化摘要和 CA Overview；财务候选变更确认；SQLite 显式初始化、备份与版本迁移；有限虚构行情的规范化、提供器适配、缓存查询和刷新。业务能力通过 Python 服务与 CLI 提供。
+**T01–T04 已实现**：四个中文业务页签与 `/api` JSON 接口，可查看/编辑财务档案、目标和持仓，创建会话并保存用户消息，读取原文/摘要/CA Overview，确认或拒绝已有财务候选，查看和手动刷新模拟行情。沿用已有 Python 服务、SQLite 显式初始化/备份/版本迁移和 CLI。
 
-**尚未实现**：业务 HTTP 接口与交互页面、真实行情提供器、模型 API、自动摘要与模型工具调用、聊天界面和目标 Dashboard。目前仅有明确标注的固定虚构行情，不是实时数据。不需要密钥或外网；导入应用、启动、访问首页或 `/health` 均不访问提供器或连接/初始化业务数据库。
+**尚未实现**：模型回答、自然语言候选提取、自动摘要、模型工具调用、真实行情、后台调度、登录/多用户、交易和完整 Dashboard。发送消息仅保存用户原文，不会产生助手回复、摘要或候选。目前仅有固定虚构行情，不是实时数据，无需密钥或外网。`create_app()`、首页 HTML 和 `/health` 不访问业务数据库或提供器；浏览器加载后通过 API 读取业务数据，未初始化时显示指引，不自动建库或填充。
 
 ## 安装与运行
 
@@ -57,6 +57,42 @@ python (Join-Path $projectPath 'run.py')
 
 停止后可用 `Set-Location $projectPath` 返回。路径来自代码文件位置，与终端工作目录无关。
 
+## 网页使用
+
+首次克隆或取得包含迁移的代码后，先按下方“初始化与虚构演示”执行 `init-db`；只有希望使用演示数据时才显式执行 `seed-demo` 和 `md-refresh`。已有 T03 数据库无需新迁移或重新填充，直接 `python run.py` 并打开 <http://127.0.0.1:5000/> 即可。
+
+- **财务档案**：编辑金额、风险偏好、目标和持仓后统一点击“保存财务档案”。删除子项会先确认，再从草稿移除，保存后才写库。空白表示未知，明确的零会保留。已确定的基础币种不可直接修改。版本冲突时保留输入，需手动重新读取并核对，不会自动重试；重新读取会在确认后丢弃未保存草稿。
+- **对话记录**：新建/切换会话、保存用户文本、展开历史摘要和 CA Overview。保存成功才清空对应会话的文本，失败保留；切换时保留该会话草稿，晚到的旧请求不会覆盖当前会话。模型未接入，不生成占位回答。历史摘要中的“当时确认”不是当前档案。
+- **待确认变更**：查看修改内容、来源会话/原始用户消息、状态和基于的档案版本。确认前再次展示具体修改，成功后读取最新档案与候选；拒绝不改 SP。查看和切换页签不会自动处理候选。本轮不提供候选编辑器。
+- **市场数据**：自动读取已有缓存，手动刷新才调用模拟提供器。显示精确值、单位、模拟标记、来源、数据时间、获取/过期时间、缓存和刷新状态。无缓存显示“暂无数据”，过期旧值和刷新错误都会保留；基金日期不补造时刻，指数点位无币种。
+
+所有写入均调用现有服务；详细请求、状态码和 MD 结果语义见 [HTTP 接口说明](docs/API.md)。本轮数据库结构仍为版本 2，未增加或改写 SQL 迁移。
+
+### 隔离的人工网页检查
+
+本轮自动浏览器通道不可用，未完成浏览器视觉、窄屏、键盘与控制台验收。已执行隔离库 HTTP 串联、全部 unittest 和前端 JavaScript 语法检查；这些不能替代浏览器验收。人工操作请先建立项目内独立副本，避免改变当前开发数据（以下在项目根目录的 PowerShell 逐行执行）：
+
+```powershell
+$webCheckPath = Join-Path (Get-Location).Path 'runtime/tests/t04-manual'
+if (Test-Path $webCheckPath) { throw '检查目录已存在，请换一个新目录名，勿覆盖已有数据' }
+New-Item -ItemType Directory -Path $webCheckPath -Force | Out-Null
+Copy-Item -Path app,run.py,requirements.txt -Destination $webCheckPath -Recurse
+Set-Location $webCheckPath
+python -m flask --app app:create_app init-db
+python -m flask --app app:create_app seed-demo
+python run.py --port 5001
+```
+
+打开 <http://127.0.0.1:5001/>，可依次检查：
+
+1. 编辑金额、增加/编辑/删除目标和持仓，保存后重新载入；用两个标签页基于同一版本编辑，先保存其中一个，再保存另一个，确认出现冲突且保留输入。
+2. 新建两个会话、快速切换并保存文本，刷新页面确认消息归属正确；展开摘要/Overview。重复主动发送相同文字应允许，连续点击一次保存不能产生重复请求。
+3. 在不同的新副本中分别确认和拒绝待确认候选，检查档案版本及预算；仅查看不能修改。处理后按钮应消失。
+4. 初始 MD 应显示空缓存，手动刷新后显示模拟值；再次读取缓存不会获取。可在浏览器开发者工具中临时模拟离线，检查错误提示与已有显示的保留，然后恢复联网。
+5. 将视口缩窄，检查自然堆叠与无横向溢出；用 Tab、方向键和 Esc 操作页签/确认框，检查可见焦点，并查看开发者工具控制台是否有异常。
+
+用 `Ctrl+C` 停止副本服务。测试副本的数据位于该副本的 `runtime/`，不会写入原开发库；不要复制真实密钥或个人资料进行检查。
+
 ## 功能检查
 
 在项目根目录执行：
@@ -65,7 +101,9 @@ python (Join-Path $projectPath 'run.py')
 python -B -m unittest discover -s tests -v
 ```
 
-测试覆盖原有离线页面、不同工作目录启动、SP/CA 持久化和候选事务，以及 T02 结构版本 1→2 的完整数据保留、有效备份/失败回滚、三类模拟行情、精度/时间校验、缓存命中/过期/强刷/失败回退、来源隔离、并发覆盖保护和携库整体复制。
+如已安装 Node，可选执行 `node --check app/static/app.js` 检查前端语法；无需 npm 安装或构建，应用运行不需要 Node。
+
+测试覆盖原有离线启动、SP/CA 和 MD 规则，以及 HTTP 档案/目标/持仓编辑、冲突回滚、固定用户角色、消息重连、候选确认/拒绝/重复处理、摘要只读、MD 状态透传、初始化提示、安全错误响应和迁移副本 API 读写。浏览器验收情况与人工步骤见上节。
 
 所有测试使用 `runtime/tests/` 下独立临时目录和数据库，结束后仅清理该次临时文件，不访问实际开发数据库。测试需要允许本机回环连接，不需要外网或模型/行情服务。
 
@@ -88,7 +126,7 @@ python -m flask --app app:create_app seed-demo
 python -c "from pprint import pprint; from app.storage import Store; s=Store(); pprint(s.get_profile()); pprint(s.list_changes())"
 ```
 
-业务入口为 `app.storage.Store`；在 Flask 相关代码中可用 `Store.from_app(app)` 读取应用配置。可选 `create_app(test_config)` 支持测试路径隔离；调用方应同时配置所需的 `DATABASE_PATH`、`RUNTIME_DIR`、`BACKUP_DIR` 等路径至项目内独立测试目录。服务签名、修改操作与异常类型见 [DATA_MODEL.md](docs/DATA_MODEL.md)。本轮不新增业务 HTTP 路由。
+业务入口为 `app.storage.Store`；在 Flask 相关代码中可用 `Store.from_app(app)` 读取应用配置。可选 `create_app(test_config)` 支持测试路径隔离；调用方应同时配置所需的 `DATABASE_PATH`、`RUNTIME_DIR`、`BACKUP_DIR` 等路径至项目内独立测试目录。服务规则见 [DATA_MODEL.md](docs/DATA_MODEL.md)，薄 HTTP 适配层见 [API.md](docs/API.md)。
 
 ## 模拟行情与已有库升级
 
@@ -121,6 +159,7 @@ app/
   __init__.py        应用创建
   config.py          集中配置与路径
   routes.py          首页和健康检查
+  api.py             JSON HTTP 接口与安全错误响应
   db.py              显式迁移、连接与事务
   migrations/        纳入 Git 的版本化 SQL
   storage.py         SP/CA 可复用服务
@@ -129,7 +168,7 @@ app/
   validation.py      有限修改结构与输入校验
   demo.py / cli.py   虚构演示逻辑与显式命令
   templates/         HTML 模板
-  static/            页面样式
+  static/            原生 JavaScript 业务交互与页面样式
 run.py               启动入口
 tests/               功能与迁移检查
 requirements.txt     直接运行依赖

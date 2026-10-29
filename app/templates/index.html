@@ -5,34 +5,80 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Personal Finance Companion</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 </head>
-<body>
+<body data-api-root="{{ request.script_root }}/api">
   <main>
-    <p class="eyebrow">MIS2001 · 个人金融规划助手</p>
-    <h1>Personal Finance Companion</h1>
-    <p>结合当前财务档案、历史决策与市场数据，辅助持续的个人金融规划。</p>
+    <header class="page-header">
+      <div><p class="eyebrow">MIS2001 · 个人金融规划助手</p><h1>Personal Finance Companion</h1>
+      <p>管理当前财务档案，保留对话与决策依据，查看模拟市场数据。</p></div>
+      <a class="health" href="{{ url_for('pages.health') }}">健康检查</a>
+    </header>
+    <p class="notice">模型回答与真实行情尚未实现。消息仅保存原文，行情均为固定虚构样例。</p>
+    <nav class="tabs" role="tablist" aria-label="业务导航">
+      <button id="tab-profile" role="tab" aria-selected="true" aria-controls="panel-profile" data-tab="profile">财务档案</button>
+      <button id="tab-chat" role="tab" aria-selected="false" aria-controls="panel-chat" tabindex="-1" data-tab="chat">对话记录</button>
+      <button id="tab-changes" role="tab" aria-selected="false" aria-controls="panel-changes" tabindex="-1" data-tab="changes">待确认变更</button>
+      <button id="tab-market" role="tab" aria-selected="false" aria-controls="panel-market" tabindex="-1" data-tab="market">市场数据</button>
+    </nav>
+    <p id="app-status" role="status" aria-live="polite"></p>
 
-    <section aria-labelledby="stage-title">
-      <h2 id="stage-title">当前阶段：T03 模拟行情与本地缓存</h2>
-      <p>已实现 SP/CA 存储、候选变更确认、显式数据库迁移，以及 MD 的 Python 服务与 CLI 缓存读取和刷新。</p>
-      <p>目前仅有明确标注的固定虚构股票价格、基金净值和指数点位，缓存新鲜不代表实时行情。</p>
-      <p>摘要由明确的服务调用写入。业务 HTTP 接口、交互页面、真实行情与模型 API、自动摘要和目标 Dashboard 尚未实现。</p>
-      <a href="{{ url_for('pages.health') }}">查看健康检查 /health</a>
+    <section id="panel-profile" role="tabpanel" aria-labelledby="tab-profile">
+      <div class="section-heading"><div><h2>当前财务档案</h2><p id="profile-version">正在读取档案…</p></div><button id="profile-reload" type="button" class="secondary">重新读取档案</button></div>
+      <p class="hint">空白表示未填写，0 表示明确为零。重要变更仅在你点击保存后写入当前档案。</p>
+      <p id="profile-status" role="status" aria-live="polite"></p>
+      <form id="profile-form">
+        <fieldset id="profile-fields" disabled>
+          <legend>基础财务情况</legend>
+          <div class="form-grid">
+            <label>基础财务币种<select id="profile-currency"><option value="">未填写</option><option value="CNY">人民币 CNY</option><option value="USD">美元 USD</option><option value="HKD">港币 HKD</option><option value="EUR">欧元 EUR</option><option value="GBP">英镑 GBP</option><option value="JPY">日元 JPY</option></select></label>
+            <label>风险偏好<select id="profile-risk"><option value="">未填写</option><option value="low">低风险</option><option value="medium">中等风险</option><option value="high">高风险</option></select></label>
+            <label>每月收入<input id="income" type="text" inputmode="decimal" placeholder="未填写"></label>
+            <label>每月支出<input id="expenses" type="text" inputmode="decimal" placeholder="未填写"></label>
+            <label>每月储蓄预算<input id="savings_budget" type="text" inputmode="decimal" placeholder="未填写"></label>
+            <label>每月投资预算<input id="investment_budget" type="text" inputmode="decimal" placeholder="未填写"></label>
+            <label>当前现金<input id="cash" type="text" inputmode="decimal" placeholder="未填写"></label>
+            <label>当前负债<input id="debt" type="text" inputmode="decimal" placeholder="未填写"></label>
+          </div>
+          <p id="currency-help" class="hint">基础币种首次确定后不能直接修改；本应用不自动换汇。金额最多两位小数。</p>
+          <div class="section-heading"><h3>财务目标</h3><button id="goal-add" type="button" class="secondary">新增目标</button></div>
+          <div id="goals"></div>
+          <div class="section-heading"><h3>基本持仓</h3><button id="holding-add" type="button" class="secondary">新增持仓</button></div>
+          <div id="holdings"></div>
+          <p class="hint">持仓数量最多八位小数、单位成本最多两位小数；不计算实时市值或跨币种合计。</p>
+          <button id="profile-save" type="submit">保存财务档案</button>
+        </fieldset>
+      </form>
     </section>
 
-    <section aria-labelledby="modules-title">
-      <h2 id="modules-title">模块职责</h2>
-      <dl>
-        <dt>SP · 结构化财务档案</dt>
-        <dd>保存当前已确认的预算、持仓、目标和偏好，表示当前有效状态。</dd>
-        <dt>CA · 对话档案</dt>
-        <dd>保存原始聊天、会话摘要和历史重要决策概览 CA Overview，解释历史变化。</dd>
-        <dt>MD · 市场数据</dt>
-        <dd>保存经过规范化、有明确来源和时间的市场数据。</dd>
-      </dl>
-      <p>后续每轮默认提供精简 SP、CA Overview 和近期消息；详细历史与行情由后端工具按需读取。</p>
-      <p>当前技术路线使用本地 SQLite，不使用 RAG、Embedding 或向量数据库。</p>
+    <section id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden>
+      <div class="section-heading"><h2>对话记录</h2><button id="chat-reload" type="button" class="secondary">重新读取会话</button></div>
+      <form id="conversation-form" class="inline-form"><label>新会话名称<input id="conversation-title" required maxlength="200" placeholder="例如：本月预算讨论"></label><button type="submit">新建会话</button></form>
+      <label class="session-picker">当前会话<select id="conversation-select" disabled><option value="">请选择会话</option></select></label>
+      <p id="chat-status" role="status" aria-live="polite"></p>
+      <div id="messages" class="messages" aria-label="历史消息"></div>
+      <form id="message-form"><label>用户消息<textarea id="message-text" rows="3" required maxlength="20000" disabled></textarea></label><p class="hint">模型尚未接入，当前仅保存消息，不生成回复、摘要或财务变更候选。</p><button id="message-send" type="submit" disabled>保存消息</button></form>
+      <details><summary>查看会话摘要</summary><p class="hint">摘要中的“当时确认”属于历史记录，当前状态请以财务档案为准。</p><div id="summaries"></div></details>
+      <details><summary>查看历史决策概览 CA Overview</summary><div id="overview"></div></details>
     </section>
+
+    <section id="panel-changes" role="tabpanel" aria-labelledby="tab-changes" hidden>
+      <div class="section-heading"><h2>财务变更候选</h2><button id="changes-reload" type="button" class="secondary">重新读取候选</button></div>
+      <p class="hint">请核对来源与具体修改后再确认。查看页面不会修改 SP；历史摘要和消息也不会自动覆盖当前档案。</p>
+      <p id="changes-status" role="status" aria-live="polite"></p><div id="changes-list"></div>
+    </section>
+
+    <section id="panel-market" role="tabpanel" aria-labelledby="tab-market" hidden>
+      <div class="section-heading"><h2>市场数据 MD</h2><button id="market-reload" type="button" class="secondary">重新读取缓存</button></div>
+      <p class="notice">以下均为模拟数据。缓存有效仅表示最近获取，不代表实时行情；只有手动刷新才会获取新的缓存记录。</p>
+      <p id="market-status" role="status" aria-live="polite"></p><div id="market-list" class="market-grid"></div>
+    </section>
+
+    <footer>SP 保存当前有效状态；CA 保存原始对话和历史依据；MD 保留来源与数据时间。仅供课程演示。</footer>
   </main>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title"></h2><p id="confirm-text" class="preserve-text"></p>
+    <form method="dialog" class="actions"><button value="cancel" class="secondary" autofocus>取消</button><button value="confirm">确认</button></form>
+  </dialog>
 </body>
 </html>
