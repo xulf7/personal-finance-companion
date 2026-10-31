@@ -49,6 +49,25 @@ def register_cli(app):
         """显式刷新三类固定虚构行情；不调用真实接口。"""
         market_command(True)
 
+    #T06
+    @app.cli.command("md-refresh-real")
+    def md_refresh_real_command():
+        """显式刷新真实日线行情（akshare）；低频使用。"""
+        from .md_provider import AkShareProvider
+        try:
+            service = MDService.from_app(app, provider=AkShareProvider())
+            results = []
+            for asset in service.list_assets():
+                metric = asset["metrics"][0]["metric"]
+                results.append({"asset": asset, **service.refresh(asset["asset_id"], metric)})
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+            if any(result["error"] for result in results):
+                raise SystemExit("部分真实行情刷新未成功，详情见 error。")
+        except StorageError as exc:
+            raise SystemExit(f"错误：{exc}") from exc
+    #T06
+
+
     @app.cli.command("md-show")
     def md_show_command():
         """查看支持的资产和已有缓存，不调用提供器。"""

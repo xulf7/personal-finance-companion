@@ -62,6 +62,9 @@ class MDService:
                  clock=utc_now, ttl_seconds=Config.MD_CACHE_TTL_SECONDS):
         self.database_path = db.local_path(database_path)
         self.provider = provider if provider is not None else MockProvider()
+        #T06 
+        self.assets = getattr(self.provider, "assets", ASSETS)
+
         self.provider_id = text(self.provider.provider_id, "提供器标识", 100)
         if type(self.provider.is_simulated) is not bool:
             raise ValidationError("提供器必须明确声明布尔型 is_simulated")
@@ -74,18 +77,41 @@ class MDService:
     @classmethod
     def from_app(cls, app, **kwargs):
         kwargs.setdefault("ttl_seconds", app.config["MD_CACHE_TTL_SECONDS"])
+
+        #T06 
+        if "provider" not in kwargs:
+            if app.config.get("MD_PROVIDER_ID", "mock-fixed-v1") == "akshare-real-daily-v1":
+                from .md_provider import AkShareProvider
+                kwargs["provider"] = AkShareProvider()
+        #T06
+
         return cls(app.config["DATABASE_PATH"], **kwargs)
 
+    """
     @staticmethod
     def list_assets():
         return [asset.describe() for asset in ASSETS]
-
+    """
+    #T06
+    def list_assets(self=None):
+        catalog = self.assets if self is not None else ASSETS
+        return [asset.describe() for asset in catalog]
+    
+    """
     @staticmethod
     def _asset(asset_id, metric):
         for asset in ASSETS:
             if asset.asset_id == asset_id and asset.metric == metric:
                 return asset
         raise UnsupportedAsset("不支持的资产或指标；请使用 list_assets() 中的完整资产标识与指标")
+    """
+    #T06
+    def _asset(self, asset_id, metric):
+        for asset in self.assets:
+            if asset.asset_id == asset_id and asset.metric == metric:
+                return asset
+        raise UnsupportedAsset("不支持的资产或指标；请使用 list_assets() 中的完整资产标识与指标")    
+
 
     def _row(self, conn, asset):
         row = conn.execute(

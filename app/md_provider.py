@@ -62,3 +62,42 @@ class MockProvider:
             "provider_id": self.provider_id, "is_simulated": self.is_simulated,
             "data_time_kind": kind, "data_time": source_time,
         }
+
+
+"""T06 test"""
+REAL_ASSETS = (
+    Asset("cn:stock:SHA:600519", "贵州茅台 600519", "stock", "SHA",
+          "600519", "price", "currency_per_share", "CNY"),
+    Asset("cn:index:SHS:000001", "上证指数 000001", "index", "SHS",
+          "000001", "index_level", "points", None),
+    Asset("cn:fund:OEF:001186", "开放式基金 001186", "fund", "OEF",
+          "001186", "nav", "currency_per_unit", "CNY"),
+)
+
+
+class AkShareProvider:
+    provider_id = "akshare-real-daily-v1"
+    is_simulated = False
+    assets = REAL_ASSETS
+
+    def fetch(self, asset, metric):
+        import akshare as ak
+        if asset.asset_type == "stock" and metric == "price":
+            frame = ak.stock_zh_a_hist(symbol=asset.code, period="daily",
+                                       start_date="20260101", end_date="20261231", adjust="")
+            value, day = frame.iloc[-1]["收盘"], str(frame.iloc[-1]["日期"])[:10]
+        elif asset.asset_type == "index" and metric == "index_level":
+            frame = ak.stock_zh_index_daily(symbol="sh" + asset.code)
+            value, day = frame.iloc[-1]["close"], str(frame.iloc[-1]["date"])[:10]
+        elif asset.asset_type == "fund" and metric == "nav":
+            frame = ak.fund_open_fund_info_em(symbol=asset.code, indicator="单位净值走势")
+            value, day = frame.iloc[-1]["单位净值"], str(frame.iloc[-1]["净值日期"])[:10]
+        else:
+            raise ValueError("真实提供器不支持该资产或指标")
+        return {
+            "asset_id": asset.asset_id, "metric": metric,
+            "value": f"{float(value):.8f}",
+            "currency": asset.currency, "unit": asset.unit,
+            "provider_id": self.provider_id, "is_simulated": self.is_simulated,
+            "data_time_kind": "date", "data_time": day,
+        }

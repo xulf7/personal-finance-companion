@@ -13,3 +13,5 @@ class Config:
     TEST_DIR = RUNTIME_DIR / "tests"
     DATABASE_PATH = DATA_DIR / "app.sqlite3"
     MD_CACHE_TTL_SECONDS = 300
+    MD_PROVIDER_ID = "mock-fixed-v1" #T06
+    
