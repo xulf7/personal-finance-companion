@@ -11,10 +11,10 @@
   <main>
     <header class="page-header">
       <div><p class="eyebrow">MIS2001 · 个人金融规划助手</p><h1>Personal Finance Companion</h1>
-      <p>管理当前财务档案，保留对话与决策依据，查看模拟市场数据。</p></div>
+      <p>管理当前财务档案，保留对话与决策依据，查看市场数据。</p></div>
       <a class="health" href="{{ url_for('pages.health') }}">健康检查</a>
     </header>
-    <p class="notice">模型回答与真实行情尚未实现。消息仅保存原文，行情均为固定虚构样例。</p>
+    <p class="notice">模型回答尚未实现，消息仅保存原文。行情默认使用虚构样例，可显式选择 AKShare 日线数据。</p>
     <nav class="tabs" role="tablist" aria-label="业务导航">
       <button id="tab-profile" role="tab" aria-selected="true" aria-controls="panel-profile" data-tab="profile">财务档案</button>
       <button id="tab-chat" role="tab" aria-selected="false" aria-controls="panel-chat" tabindex="-1" data-tab="chat">对话记录</button>
@@ -70,7 +70,7 @@
 
     <section id="panel-market" role="tabpanel" aria-labelledby="tab-market" hidden>
       <div class="section-heading"><h2>市场数据 MD</h2><button id="market-reload" type="button" class="secondary">重新读取缓存</button></div>
-      <p class="notice">以下均为模拟数据。缓存有效仅表示最近获取，不代表实时行情；只有手动刷新才会获取新的缓存记录。</p>
+      <p class="notice">来源与模拟标记见各项。真实模式经 AKShare 获取：股票为不复权日线收盘价（东方财富），指数为日线收盘点位（新浪），基金为正式单位净值（天天基金/东方财富），均非实时行情。缓存有效仅表示最近获取；只有手动刷新才会获取新记录。</p>
       <p id="market-status" role="status" aria-live="polite"></p><div id="market-list" class="market-grid"></div>
     </section>
 

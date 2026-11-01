@@ -2,7 +2,7 @@
 
 当前为单用户、单份有效档案，使用标准库 `sqlite3`，没有 ORM。T04 网页与 HTTP 接口通过已有服务读写，未新增数据结构或迁移。唯一真实状态来源是 SP；摘要与 Overview 属于历史解释，保存它们不会写入 SP。
 
-MD 独立保存有限资产定义与当前行情缓存，本轮唯一提供器仅返回固定虚构数据，不包含真实行情或实时性保证。
+MD 独立保存有限资产定义与当前行情缓存，默认 mock 固定虚构数据，也支持显式选择 AKShare 真实日线；均不保证实时性。T06 沿用结构版本 2，不新增迁移，不改写 001/002。
 
 ## 表关系与字段
 
@@ -130,7 +130,7 @@ python -B -m unittest discover -s tests -v
 
 名称均包含“虚构演示”，市场为 `DEMO_EXCHANGE` 或 `DEMO_FUNDS`，短代码均为 `DEMO001`。`md_assets` 对 `(asset_type, market, code)` 设唯一约束；资产定义与目录不一致时拒绝覆盖。
 
-提供器协议仅包含 `provider_id`、布尔型 `is_simulated` 和 `fetch(asset, metric)`。返回字典必须包含以下全部字段，不接受额外字段：
+提供器提供 `provider_id`、布尔型 `is_simulated`、有限 `assets` 目录和 `fetch(asset, metric)`。服务仍兼容未声明 assets 的已有模拟替身（使用 ASSETS），真实实现显式声明 REAL_ASSETS。返回字典必须包含以下全部字段，不接受额外字段：
 
 | 字段 | 语义 |
 | --- | --- |
@@ -143,11 +143,29 @@ python -B -m unittest discover -s tests -v
 
 MD 的 `value` 规范化后保存为八位小数文本，不接受浮点数、布尔值、NaN、无穷值或需要舍入的数值；额外尾随零可接受。缺失字段或 `None` 值视为无效响应，不写入缓存、不用零替代；明确提供的零是合法值。MD 复用数值校验的八位参数，未修改 SP 两位金额精度或业务规则。
 
-日期必须是 `YYYY-MM-DD`，基金样例固定为 `2026-01-14`，不补造时间。日期时间须带时区，保存为 UTC、六位小数、`Z` 结尾的 ISO 8601 文本；股票/指数样例固定为 `2026-01-15T07:00:00.000000Z`。刷新不会把样例数据时间改成当前时间。后续真实适配器负责将外部字段转换成同一规范，本轮没有真实接口实现。
+日期必须是 `YYYY-MM-DD`，基金样例固定为 `2026-01-14`，不补造时间。日期时间须带时区，保存为 UTC、六位小数、`Z` 结尾的 ISO 8601 文本；股票/指数样例固定为 `2026-01-15T07:00:00.000000Z`。刷新不会把样例数据时间改成当前时间。真实适配器的三类数据均保留中国市场源日期，见下节。
+
+### AKShare 真实适配
+
+保留 `AkShareProvider` 与 `REAL_ASSETS`，来源 ID `akshare-real-daily-v1`、模拟标记 False：
+
+| 完整 ID | 指标 | 单位 / 币种 | 上游及语义 |
+| --- | --- | --- | --- |
+| cn:stock:SHA:600519 | price | currency_per_share / CNY | 东方财富，贵州茅台不复权日线收盘价 |
+| cn:index:SHS:000001 | index_level | points / NULL | 新浪，上证指数日线收盘点位 |
+| cn:fund:OEF:001186 | nav | currency_per_unit / CNY | 天天基金/东方财富，正式单位净值 |
+
+不按短代码猜测资产。`provider_for_id()` 为唯一选择映射；环境变量 MD_PROVIDER_ID 由 Config 在应用创建时读取，默认 mock，未知 ID 报错；`from_app()` 使用应用配置，直接 `MDService()` 使用当前环境。显式 provider 注入优先，clock 注入同时用于真实适配器的市场日期计算。目录是实例方法 `service.list_assets()`，增加 provider_id/is_simulated 元数据，API、CLI 与缓存使用同一实例配置。
+
+股票请求以中国 UTC+8 日期计算最近 45 个自然日窗口；15:00 前截止前一天，15:00 起允许当天。指数同样排除当日未完成 K 线。基金使用已公布源日期，允许延迟。校验每行日期与数值，按最大合格日期选择，不依赖排序；未来日期、非法日期、同日冲突值、缺列、空表均失败，不跳过坏数据伪装成功。接口返回历史表仅在内存中挑最新项，不落历史库；超出股票窗口无数据则失败，不隐式扩大请求。
+
+适配器边界允许上游 str/实数/Decimal，以 `Decimal(str(value))` 转换再调用原有 `decimal_text(..., places=8)`；八位内补齐尾零只是输出格式，不掩盖缺失或进行舍入。上游 float 无法恢复原始精度，超精度、布尔值、NaN/Infinity、未知值均拒绝，零合法。SP 数值规则不变。适配校验错误返回 invalid_response；导入/网络等异常返回 provider_error，均由 MDService 保留缓存。
+
+锁定 AKShare 1.20.18，三函数签名不支持 timeout 参数，使用其原生 HTTP 默认连接/读取超时 (10, 60) 秒，不全局 monkeypatch、无额外重试或自动 mock 回退。延迟导入仅发生在 fetch；列目录、只读缓存、Web 创建和首页/health 无外部请求。
 
 ## MD 缓存服务与并发规则
 
-入口为 `app.md.MDService(database_path=Config.DATABASE_PATH, provider=None, clock=utc_now, ttl_seconds=300)`，或 `MDService.from_app(app, **kwargs)`。默认提供器是 `MockProvider`，ID 为 `mock-fixed-v1`、模拟标记为 `True`。构造、列目录和 Flask 应用创建均不连接数据库或获取行情；读缓存和查询要求数据库已初始化至当前结构版本。
+入口为 `app.md.MDService(database_path=Config.DATABASE_PATH, provider=None, clock=utc_now, ttl_seconds=300)`，或 `MDService.from_app(app, **kwargs)`。未指定配置时提供器是 `MockProvider`，ID 为 `mock-fixed-v1`、模拟标记为 `True`。构造、列目录和 Flask 应用创建均不连接数据库或获取行情；读缓存和查询要求数据库已初始化至当前结构版本。
 
 | 方法 | 行为 |
 | --- | --- |
@@ -176,7 +194,7 @@ python -m flask --app app:create_app md-refresh
 python -m flask --app app:create_app md-show
 ```
 
-`md-refresh` 逐项强制获取目录中的三项虚构行情；每项独立原子提交，部分失败时保留已成功的项，并以非零退出码和逐项 error 说明结果。`md-show` 仅查看缓存和完整定义。两者都不修改 SP/CA，也不改变原有 `seed-demo` 的幂等和保护行为；仅有 MD 数据不会阻止空 SP/CA 的显式演示填充。没有后台线程、自动刷新、交易日历或行情历史库。
+`md-refresh` 逐项强制获取当前配置目录，默认 mock；`md-refresh-real` 显式获取真实目录但不修改环境配置。每项独立原子提交，部分失败时保留已成功的项，并以非零退出码和逐项 error 说明结果。`md-show` 仅查看当前配置对应缓存和完整定义，始终只读。三者都不修改 SP/CA，也不改变原有 `seed-demo` 的幂等和保护行为；仅有 MD 数据不会阻止空 SP/CA 的显式演示填充。没有后台线程、自动刷新、交易日历或行情历史库。切换/查看命令见 [README](../README.md#akshare-真实日线切换刷新与查看)。
 
 ## T04 界面与 HTTP 适配
 

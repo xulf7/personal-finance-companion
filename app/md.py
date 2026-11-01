@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from . import db
 from .config import Config
 from .errors import SchemaError, ValidationError
-from .md_provider import ASSETS, MockProvider, Provider
+from .md_provider import ASSETS, Provider, provider_for_id
 from .validation import decimal_text, exact_keys, text
 
 QUOTE_FIELDS = ("asset_id", "metric", "value", "currency", "unit", "provider_id",
@@ -61,8 +61,7 @@ class MDService:
     def __init__(self, database_path=Config.DATABASE_PATH, *, provider: Provider | None = None,
                  clock=utc_now, ttl_seconds=Config.MD_CACHE_TTL_SECONDS):
         self.database_path = db.local_path(database_path)
-        self.provider = provider if provider is not None else MockProvider()
-        #T06 
+        self.provider = provider if provider is not None else provider_for_id(Config.provider_id(), clock=clock)
         self.assets = getattr(self.provider, "assets", ASSETS)
 
         self.provider_id = text(self.provider.provider_id, "提供器标识", 100)
@@ -77,41 +76,22 @@ class MDService:
     @classmethod
     def from_app(cls, app, **kwargs):
         kwargs.setdefault("ttl_seconds", app.config["MD_CACHE_TTL_SECONDS"])
+        kwargs.setdefault("clock", utc_now)
 
-        #T06 
         if "provider" not in kwargs:
-            if app.config.get("MD_PROVIDER_ID", "mock-fixed-v1") == "akshare-real-daily-v1":
-                from .md_provider import AkShareProvider
-                kwargs["provider"] = AkShareProvider()
-        #T06
+            kwargs["provider"] = provider_for_id(app.config["MD_PROVIDER_ID"], clock=kwargs["clock"])
 
         return cls(app.config["DATABASE_PATH"], **kwargs)
 
-    """
-    @staticmethod
-    def list_assets():
-        return [asset.describe() for asset in ASSETS]
-    """
-    #T06
-    def list_assets(self=None):
-        catalog = self.assets if self is not None else ASSETS
-        return [asset.describe() for asset in catalog]
-    
-    """
-    @staticmethod
-    def _asset(asset_id, metric):
-        for asset in ASSETS:
-            if asset.asset_id == asset_id and asset.metric == metric:
-                return asset
-        raise UnsupportedAsset("不支持的资产或指标；请使用 list_assets() 中的完整资产标识与指标")
-    """
-    #T06
+    def list_assets(self):
+        return [{**asset.describe(), "provider_id": self.provider_id,
+                 "is_simulated": self.is_simulated} for asset in self.assets]
+
     def _asset(self, asset_id, metric):
         for asset in self.assets:
             if asset.asset_id == asset_id and asset.metric == metric:
                 return asset
-        raise UnsupportedAsset("不支持的资产或指标；请使用 list_assets() 中的完整资产标识与指标")    
-
+        raise UnsupportedAsset("不支持的资产或指标；请使用 list_assets() 中的完整资产标识与指标")
 
     def _row(self, conn, asset):
         row = conn.execute(
@@ -151,6 +131,8 @@ class MDService:
         # 此时读连接已经关闭；即使提供器响应缓慢，也不占用写锁。
         try:
             payload = self.provider.fetch(asset, metric)
+        except ValidationError as exc:
+            return self._failure(asset, "invalid_response", str(exc))
         except Exception as exc:
             return self._failure(asset, "provider_error", f"提供器获取失败：{exc}")
         try:

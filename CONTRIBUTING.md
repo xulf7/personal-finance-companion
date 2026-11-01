@@ -61,10 +61,10 @@
 python -c "import sys; print(sys.executable); print(sys.version)"
 ```
 
-运行或修改代码时，在项目根目录按需安装唯一直接依赖，然后启动：
+运行或修改代码时，在项目根目录检查并按需安装直接依赖（Flask、AKShare），然后启动：
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt -c constraints.txt
 python run.py
 ```
 
@@ -76,6 +76,8 @@ python -B -m unittest discover -s tests -v
 ```
 
 首次克隆或拉取包含数据库迁移的代码后，在使用业务服务前先执行 `python -m flask --app app:create_app init-db`；已有库会在需要升级时自动备份，不要删库重建。SP/CA 演示和模拟行情均须显式填充，Web 启动不会自动写入。首次上手、已有库升级、`md-refresh`/`md-show` 的完整步骤见 [README](README.md#模拟行情与已有库升级)，只改文档无需初始化数据库。
+
+默认 mock 可离线运行，仅需 Flask；离线测试不需要安装 AKShare/pandas。启用真实模式前检查 `python -m pip show akshare`，缺少时按 [README 安装说明](README.md#安装与运行) 安装锁定的 1.20.18，并使用 constraints.txt 保留已验证平台的完整运行时间接依赖版本，勿批量升级环境；平台范围和更新方式以 README 为准。按 [README 真实日线步骤](README.md#akshare-真实日线切换刷新与查看) 在启动服务的同一终端设置 MD_PROVIDER_ID，停止旧服务后重启并重载网页。`md-refresh`/`md-show` 跟随当前配置，`md-refresh-real` 仅本次显式刷新真实数据、不切换网页；读缓存不联网。真实数据为日线收盘或正式单位净值，允许交易日/公布延迟；失败保留旧缓存，请低频使用。T06 沿用结构版本 2，无需新迁移或重填 SP/CA。
 
 首页和健康检查不需要 API 密钥或外网。用 `Ctrl+C` 停止；端口冲突时用 `python run.py --port 5001`，访问和检查时同样换端口。只改文档无需安装全部运行依赖；检查 Markdown、链接以及与实际代码一致的命令即可。更多路径与迁移说明见 [README](README.md)。
 
