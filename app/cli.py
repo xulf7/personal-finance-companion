@@ -30,9 +30,10 @@ def register_cli(app):
         print("已生成虚构演示：500 → 提出 800 → 确认后 800；另有待确认 1000。"
               if result["created"] else "虚构演示已存在，本次未修改任何数据。")
 
-    def market_command(refresh):
+    def market_command(refresh, provider=None):
         try:
-            service = MDService.from_app(app)
+            options = {} if provider is None else {"provider": provider}
+            service = MDService.from_app(app, **options)
             results = []
             for asset in service.list_assets():
                 metric = asset["metrics"][0]["metric"]
@@ -40,16 +41,22 @@ def register_cli(app):
                 results.append({"asset": asset, **result})
             print(json.dumps(results, ensure_ascii=False, indent=2))
             if refresh and any(result["error"] for result in results):
-                raise SystemExit("部分模拟行情刷新未成功，详情见 error；已有缓存仍保留。")
+                raise SystemExit("部分行情刷新未成功，详情见 error；已有缓存仍保留。")
         except StorageError as exc:
             raise SystemExit(f"错误：{exc}") from exc
 
     @app.cli.command("md-refresh")
     def md_refresh_command():
-        """显式刷新三类固定虚构行情；不调用真实接口。"""
+        """显式刷新当前 MD_PROVIDER_ID 的有限目录；默认 mock。"""
         market_command(True)
+
+    @app.cli.command("md-refresh-real")
+    def md_refresh_real_command():
+        """显式刷新真实日线行情（akshare）；低频使用。"""
+        from .md_provider import AkShareProvider
+        market_command(True, AkShareProvider())
 
     @app.cli.command("md-show")
     def md_show_command():
-        """查看支持的资产和已有缓存，不调用提供器。"""
+        """查看当前 MD_PROVIDER_ID 的目录与缓存；始终只读、不联网。"""
         market_command(False)

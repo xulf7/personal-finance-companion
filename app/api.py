@@ -145,7 +145,7 @@ def reject_change(change_id):
 
 @api.get("/market/assets")
 def assets():
-    return response(MDService.list_assets())
+    return response(market().list_assets())
 
 
 def market_result(value):

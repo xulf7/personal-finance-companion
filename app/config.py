@@ -1,6 +1,7 @@
 """集中定义路径；所有位置均由代码所在目录推导。"""
 
 from pathlib import Path
+import os
 
 
 class Config:
@@ -13,3 +14,9 @@ class Config:
     TEST_DIR = RUNTIME_DIR / "tests"
     DATABASE_PATH = DATA_DIR / "app.sqlite3"
     MD_CACHE_TTL_SECONDS = 300
+    MD_PROVIDER_ID = "mock-fixed-v1"
+
+    @staticmethod
+    def provider_id():
+        """每次创建应用/独立服务时读取当前进程环境，不自动加载 .env。"""
+        return os.environ.get("MD_PROVIDER_ID", Config.MD_PROVIDER_ID)

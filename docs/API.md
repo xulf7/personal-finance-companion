@@ -70,11 +70,11 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 只有 pending 可进入 confirmed/rejected。重复确认 confirmed 或重复拒绝 rejected 返回原结果，不重复执行。拒绝后确认、确认后拒绝均为 409；基于旧 SP 版本的候选确认返回 version_conflict，仍保留待确认状态。浏览器确认前再次列出具体修改，成功后读取当前档案和候选状态；仅查看不处理候选。
 
-## 模拟行情
+## 市场数据（mock / AKShare）
 
 | 方法与路径 | 请求 / 返回 |
 | --- | --- |
-| `GET /api/market/assets` | 有限目录，含完整 asset_id、display_name、类型、市场、代码及 metrics 的单位/币种，无数据库也可读取 |
+| `GET /api/market/assets` | 当前提供器有限目录，含完整 asset_id、display_name、类型、市场、代码、metrics 的单位/币种，以及 provider_id、is_simulated，无数据库也可读取 |
 | `GET /api/market/cache?asset_id=...&metric=...` | 只读已有缓存；两项参数各出现一次，不接受额外参数 |
 | `POST /api/market/refresh` | 仅 asset_id 与 metric，显式调用 refresh |
 
@@ -104,8 +104,12 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 外层 data 是统一 HTTP 包装，内层 data 是 MD 记录或 null。保留三种缓存状态 fresh/stale/missing 与五种刷新状态 not_requested/not_needed/updated/failed/superseded；错误仍含 code/message。GET 不获取、不延长有效期，页面渲染也不会偷偷调用刷新。股票价格为货币/股、基金净值为货币/份、指数点位为 points 且 currency=null，不相互冒充。
 
+三个接口统一通过 `MDService.from_app(app)` 选择目录和提供器；配置默认 `MD_PROVIDER_ID=mock-fixed-v1`，显式选择 `akshare-real-daily-v1` 后返回三个真实资产。配置错误在应用创建时明确报错，不回退。环境变量切换、重启和 CLI 查看方法见 [README](../README.md#akshare-真实日线切换刷新与查看)。请求体不允许临时指定其他提供器，须使用当前目录完整 ID；跨模式的 ID 返回 400。
+
+真实刷新示例：`{"asset_id":"cn:stock:SHA:600519","metric":"price"}`。真实记录 `provider_id=akshare-real-daily-v1`、`is_simulated=false`、`data_time_kind=date`。茅台为东方财富不复权日线收盘价，上证为新浪日线收盘点位，001186 为天天基金/东方财富正式单位净值；页面说明对应上游。15:00 前排除股票/指数未完成当日 K 线，基金允许公布延迟。数据日期与 fetched_at 分开，不保证日期等于今天。
+
 默认 TTL 300 秒，`fetched_at <= now < expires_at` 才 fresh，到期即 stale。fresh 不等于实时，必须显示模拟标记、数据时间和来源；基金只有日期时保留日期语义。响应错误时旧记录、获取时间和过期时间不变；有旧缓存则返回旧值及错误，无旧值则 data=null、missing、failed，不用 0 替代。superseded 返回已经保存的缓存及提示，不自动循环重试。提供器异常详情替换为安全中文提示，错误 code 与状态不丢失。
 
 ## 上手与检查
 
-初始化、演示、启动和隔离人工检查步骤统一见 [README](../README.md#网页使用)。本轮结构版本仍为 2，001/002 未改；没有重置、清库、执行任意命令、注册登录、模型调用、真实行情或交易接口。
+初始化、演示、启动和隔离人工检查步骤统一见 [README](../README.md#网页使用)。结构版本仍为 2，001/002 未改；没有重置、清库、执行任意命令、注册登录、模型调用或交易接口。

@@ -349,11 +349,15 @@
   function drawMarket(model) {
     const {asset, result, loading, error} = model;
     const row = result?.data;
-    model.card.replaceChildren(node("h3", asset.display_name), node("span", row?.is_simulated === false ? "非模拟数据" : "模拟数据", "badge"));
+    const simulated = row?.is_simulated ?? asset.is_simulated;
+    model.card.replaceChildren(node("h3", asset.display_name), node("span", simulated ? "模拟数据" : "真实日线数据（非实时）", "badge"));
+    const provider = row?.provider_id ?? asset.provider_id;
+    const upstream = {stock: "东方财富 · 不复权日线收盘", index: "新浪财经 · 日线收盘", fund: "天天基金/东方财富 · 正式单位净值"};
+    model.card.append(node("p", `来源：${provider}${simulated ? "" : ` / AKShare / ${upstream[asset.asset_type]}`}`));
     model.card.append(node("p", metricNames[asset.metrics[0].metric]), node("p", row ? row.value : "暂无数据", "quote-value"));
     if (row) {
       const unit = {currency_per_share: `${row.currency}/股`, currency_per_unit: `${row.currency}/份`, points: "点（无币种）"}[row.unit];
-      model.card.append(node("p", `单位：${unit}`), node("p", `来源：${row.provider_id}`), node("p", row.data_time_kind === "date" ? `数据日期：${row.data_time}（仅日期）` : `数据时间：${time(row.data_time)}`), node("p", `获取时间：${time(row.fetched_at)}`, "meta"), node("p", `过期时间：${time(row.expires_at)}`, "meta"));
+      model.card.append(node("p", `单位：${unit}`), node("p", row.data_time_kind === "date" ? `数据日期：${row.data_time}（仅日期）` : `数据时间：${time(row.data_time)}`), node("p", `获取时间：${time(row.fetched_at)}`, "meta"), node("p", `过期时间：${time(row.expires_at)}`, "meta"));
     }
     if (result) {
       model.card.append(node("p", {fresh: "缓存有效（不代表实时）", stale: "缓存已过期，当前展示旧值", missing: "暂无可用缓存"}[result.cache_status], result.cache_status === "stale" ? "warning-text" : ""), node("p", `刷新结果：${refreshNames[result.refresh_status]}`));
