@@ -213,7 +213,7 @@ chat_requests.id 为调用方稳定标识，全局唯一；conversation_id/user_
 
 部分唯一索引 chat_one_unfinished 保证同会话最多一个非成功请求。创建请求与用户消息同事务；明确重试复用用户消息、更新 attempt_id 和 lease_until。外部模型调用在事务外，成功后用短事务校验尝试令牌并原子插入助手消息及成功状态。失败只写固定错误 code/message，不把错误写为助手消息；回复保存失败整体回滚并记录 save_failed。相同成功请求幂等读取，不再次调用或累加消息。Store.add_message 在存在未完成聊天时拒绝其他写入，只有持本次内部令牌的助手保存可继续，旧原文接口无模型调用。
 
-占用期限为 max(180, 3×请求超时) 秒。GET 对过期 running 仅计算 interrupted/can_retry，不改库；明确重试换新令牌，迟到旧尝试不能覆盖。重启无自动恢复或后台任务，外部可能已经处理并计费，明确重试可能再次收费。跨进程保护来自 SQLite，不依赖仅当前 Python 进程的锁；不同会话可并行。聊天不修改档案、摘要、Overview 或候选，历史仍由 CA 原文解释。
+T08 工具版占用期限为 max(180, (工具轮数+1)×请求超时+工具总数×75+30) 秒，默认510秒，为多轮及行情请求预留时间；注入整个替身模型的原测试路径仍为max(180,3×超时)。GET 对过期 running 仅计算 interrupted/can_retry，不改库；明确重试换新令牌，迟到旧尝试不能覆盖。重启无自动恢复或后台任务，外部可能已经处理并计费，明确重试可能再次收费。跨进程保护来自 SQLite，不依赖仅当前 Python 进程的锁；不同会话可并行。聊天不修改档案、摘要、Overview 或候选，历史仍由 CA 原文解释。
 
 ## T07 归档工作流
 
@@ -241,4 +241,14 @@ archive_evidence.source_message_id 为主键，绑定change_id及archive_id，�
 
 同批次合并确认复用archive_evidence、archive_requests与profile_changes，无新表或迁移。`Store.confirm_change_batch` 在单个BEGIN IMMEDIATE事务中验证成功批次、会话归属、精确的全部剩余pending集合及首次SP版本；拒绝项不会被过滤后悄悄应用，客户端必须重新提交明确核对的剩余项。仅合并基础金额与风险偏好；同字段同值去重，不同值/币种冲突要求先拒绝。调用原 `_apply` 一次，再将全部候选写为confirmed，processed_at与applied_version一致；失败则SP和所有状态整体回滚。已确认集合的相同applied_version支持幂等返回，无需新增请求记录；不自动重设基准，单条流程或其他编辑造成的真实版本冲突继续保留。
 
-外部调用在数据库事务外；校验成功后摘要、Overview、候选、来源去重和成功状态一次提交。任何保存失败全部回滚，再用独立短事务记录固定中文错误；原聊天和先前归档不变。状态保存也失败时抛 ArchiveSaveError，由HTTP返回503，重新读取后再判断，不伪装成功。没有后台归档、无限重试、行情/历史查询工具或目标计算。
+外部调用在数据库事务外；校验成功后摘要、Overview、候选、来源去重和成功状态一次提交。任何保存失败全部回滚，再用独立短事务记录固定中文错误；原聊天和先前归档不变。状态保存也失败时抛 ArchiveSaveError，由HTTP返回503，重新读取后再判断，不伪装成功。没有后台归档或无限重试；聊天中的受限查询和计算由下述T08入口提供。
+
+## T08 工具与存储边界
+
+结构仍为v4，没有新增表或迁移。`ChatService` 默认模型编排通过 `ChatTools.from_app(app)`，也可注入 completion(config,messages,**options) 和工具实例离线验证；原 model(messages) 注入路径继续可用。`llm.complete(...,tools=...,tool_choice=...)` 返回的 CheckResult 增加默认空tuple的 tool_calls；不传tools的连通检查/归档继续只接受有效文本。
+
+ChatTools仅实现search_history、query_market、calculate_savings。历史查询在短只读连接内用json_each展开summaries.content_json的各类别数组，仅按参数化instr匹配实际文本条目，不匹配固定JSON键名；同会话/同范围只选择最新版本，正文筛选后再取有限条数，返回带来源的有限摘录，包括Overview来源集合之外的摘要。不会读取其他会话原始消息作为工具结果。行情复用当前应用MDService和已有缓存隔离、TTL及并发保护；唯一可能写入的是md_assets/md_cache。计算用Decimal局部50位精度和向上取整，金额沿用SP两位精度，不改变SP/MD原精度。SP明确来源仅支持目标target_amount和基础savings_budget，已存金额没有SP映射；币种不一致不换汇，用户假设只用于当次计算。
+
+储蓄状态说明从已有status/inputs/missing/gap/months生成，不新增持久字段。months=null且没有其他可用结果时，最终assistant正文使用后端说明；来源提取确认有历史命中records或可展示行情data（含stale缓存）时才保留模型回答及来源，独立附后端计算状态。空结果、失败无数据、上限跳过不算可用。重算只取最后一次结构合法的计算结果，未达成或未知不能当作0个月；这些说明随原有最终回复事务保存，接口返回与历史正文一致，重放直接读取已保存正文。
+
+模型assistant/tool中间消息只在内存中按tool_call_id配对，不写messages或其他表。chat_requests的model记录最后响应实际模型；usage仅累加每次响应均实际提供的同名字段，不估算。成功重放不再进入工具循环；失败只保留用户问题和固定错误，明确重试可能再次调用外部服务。归档继续只处理已持久化的完整user/assistant轮次，候选提取、确认、冲突和事务规则不变。工具参数/结果/轮数边界及演示见[README](../README.md#聊天工具与-mvp-演示t08)，具体字段见[API](API.md#聊天工具t08无新增http地址)。

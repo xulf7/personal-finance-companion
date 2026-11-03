@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import os
 import logging
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -35,6 +36,7 @@ class CheckResult:
     reply: str
     model: str | None
     usage: dict | None
+    tool_calls: tuple = ()
 
 
 def _placeholder(value):
@@ -135,11 +137,32 @@ def redact(value, api_key):
     return "".join(char if char in "\n\t" or (ord(char) >= 32 and ord(char) != 127) else "?" for char in value)
 
 
-def _parse_response(value, api_key):
+def _parse_response(value, api_key, *, allow_tools=False):
     try:
         choices = value["choices"]
-        reply = choices[0]["message"]["content"]
-        if not isinstance(reply, str) or not reply.strip() or len(reply) > 20000:
+        message = choices[0]["message"]
+        calls = message.get("tool_calls")
+        if calls is None:
+            calls = []
+        if not isinstance(calls, list) or len(calls) > 16 or (calls and not allow_tools):
+            raise ValueError()
+        ids = set()
+        normalized = []
+        for call in calls:
+            function = call["function"]
+            call_id, name, arguments = call["id"], function["name"], function["arguments"]
+            if (call["type"] != "function" or not isinstance(call_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", call_id) or call_id in ids
+                    or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+                    or not isinstance(arguments, str) or len(arguments) > 4000):
+                raise ValueError()
+            ids.add(call_id)
+            normalized.append({"id": redact(call_id, api_key), "type": "function",
+                               "function": {"name": redact(name, api_key), "arguments": redact(arguments, api_key)}})
+        reply = message.get("content")
+        if reply is None and normalized:
+            reply = ""
+        if not isinstance(reply, str) or len(reply) > 20000 or (not reply.strip() and not normalized):
             raise ValueError()
         model = value.get("model")
         if model is not None and (not isinstance(model, str) or not model.strip()):
@@ -153,7 +176,7 @@ def _parse_response(value, api_key):
                 raise ValueError()
     except (ValueError, KeyError, IndexError, TypeError, UnicodeError, AttributeError):
         raise LLMError("response", "响应格式异常：未获得有效文本回复，或模型/用量字段格式无效。") from None
-    return CheckResult(redact(reply.strip(), api_key), redact(model, api_key) if model else None, usage or None)
+    return CheckResult(redact(reply.strip(), api_key), redact(model, api_key) if model else None, usage or None, tuple(normalized))
 
 
 def _make_client(config, timeout):
@@ -167,7 +190,7 @@ def _make_client(config, timeout):
                   http_client=DefaultHttpxClient(timeout=timeout, follow_redirects=False))
 
 
-def complete(config, messages, *, max_tokens=1024, timeout=60, client=None):
+def complete(config, messages, *, max_tokens=1024, timeout=60, client=None, tools=None, tool_choice="auto"):
     """检查和聊天共用 SDK 请求层；仅调用者显式执行时联网。"""
     from openai import APIConnectionError, APITimeoutError, APIStatusError, APIResponseValidationError
     logging.getLogger("openai._base_client").disabled = True
@@ -178,11 +201,20 @@ def complete(config, messages, *, max_tokens=1024, timeout=60, client=None):
     owned = client is None
     try:
         client = _make_client(config, timeout) if owned else client
+        def safe(value):
+            if isinstance(value, str):
+                return redact(value, config.api_key)
+            if isinstance(value, list):
+                return [safe(item) for item in value]
+            if isinstance(value, dict):
+                return {key: safe(item) for key, item in value.items()}
+            return value
+        options = {"tools": safe(tools), "tool_choice": tool_choice} if tools else {}
         response = client.chat.completions.create(
-            model=config.model, messages=[{"role": message["role"], "content": redact(message["content"], config.api_key)} for message in messages], stream=False, max_tokens=max_tokens,
-            extra_body={"enable_thinking": False},
+            model=config.model, messages=safe(messages), stream=False, max_tokens=max_tokens,
+            extra_body={"enable_thinking": False}, **options,
         )
-        return _parse_response(response.model_dump(mode="json", warnings=False), config.api_key)
+        return _parse_response(response.model_dump(mode="json", warnings=False), config.api_key, allow_tools=bool(tools))
     except APITimeoutError:
         raise LLMError("timeout", "模型请求超时；服务端可能已处理并计费，请明确重试，程序不会自动重试。") from None
     except APIStatusError as exc:

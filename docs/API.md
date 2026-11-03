@@ -70,9 +70,33 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 成功 HTTP 包装 `{"data":turn}`；turn 包含 id、conversation_id、status、can_retry、真实 user_message、assistant_message（尚无则 null）、model、usage、error、lease_until、updated_at。status 为 running/failed/succeeded，GET 将占用期结束但未确认完成的 running 显示为 interrupted；不在 GET 中更新数据库。usage 仅服务端提供的输入/输出/总计，可能 null，不估算。
 
-模型失败或回复保存失败仍可返回 HTTP 200 的 turn，必须检查 status/error，不能把 HTTP 成功当聊天成功。failed 保留原文且不存假助手消息；save_failed 明确“已取得模型回复但未保存”，重试可能再次计费。若处理状态也无法保存，则返回 503/chat_storage_failed，须重读会话确认，不反复发送。running 默认至少占用 180 秒，未到期同请求不再调用；过期后必须明确重试，新 attempt_id 阻止迟到旧回复覆盖。没有自动重试、后台恢复或精确的外部计费一次性保证。
+模型失败或回复保存失败仍可返回 HTTP 200 的 turn，必须检查 status/error，不能把 HTTP 成功当聊天成功。failed 保留原文且不存假助手消息；save_failed 明确“已取得模型回复但未保存”，重试可能再次计费。若处理状态也无法保存，则返回 503/chat_storage_failed，须重读会话确认，不反复发送。T08 工具版默认占用510秒，未到期同请求不再调用；过期后必须明确重试，新 attempt_id 阻止迟到旧回复覆盖。没有自动重试、后台恢复或精确的外部计费一次性保证。
 
 上下文为后端固定 system、精简 SP、可选最新 Overview、当前会话近期消息与本次问题；限制和配置见 README。SP/Overview 以数据消息提供，不提升为 system，不混入其他会话原文。原有 SP/摘要/Overview/候选状态不因聊天改变。模型异常不记录原始响应或认证信息，输出密钥会替换脱敏；文本用 textContent 渲染，不作为 HTML。
+
+### 聊天工具（T08，无新增HTTP地址）
+
+沿用上述 POST chat/retry；浏览器仍只发送问题和 request_id，不能指定工具、SQL、URL、角色或认证信息。默认模型路径经 `ChatTools` 执行白名单工具，普通文本回复无额外工具轮次；归档 JSON 路径不注册工具。工具调用和结果按 tool_call_id 配对，仅用于当次模型上下文，不写入 messages，不影响 T07 完整轮次识别。
+
+| 工具 | 必填参数与边界 | 结果 |
+| --- | --- | --- |
+| search_history | keyword非空文本1–80字符；limit整数1–5 | ok/matched/records，最新覆盖版本的摘要摘录，含id、conversation_id、version、first/last_sequence、created_at及会话标题 |
+| query_market | asset_id为当前目录完整ID；metric为该资产支持指标 | ok、asset、data、display_unit、cache_status、refresh_status、error、notice；data沿用MD规范，无数据为null |
+| calculate_savings | target/saved/monthly三个输入对象，见下例 | inputs含来源/币种/SP版本、gap精确文本、months整数或null、status、缺项/口径说明 |
+
+计算工具模型参数示例（不是新的公开请求体）：
+
+```json
+{"target":{"source":"user","value":"12000","currency":"CNY","goal_id":null},"saved":{"source":"user","value":"3000","currency":"CNY","goal_id":null},"monthly":{"source":"user","value":"1500","currency":"CNY","goal_id":null}}
+```
+
+source=user仅表示用户明确情景，value为基本单位十进制字符串或null，currency为三位大写币种或null，goal_id必须null。source=sp_goal仅用于target，提供goal_id、value/currency必须null；source=sp_savings_budget仅用于monthly，其余三字段必须null。后端读取当前SP，不信任模型伪造SP值；没有目标已存字段，saved只接受用户输入，不能默认为现金。输出status为calculated/reached/unreachable/missing_input/currency_mismatch；未知不作零，币种不同不计算，不计收益或换汇，已达标无需月存入也返回0个月。
+
+missing_input、currency_mismatch、unreachable表示工具正常执行但没有可用月数（months=null），并非模型/网络异常。后端根据结构化状态生成固定中文说明：列出缺少的具体金额/币种、币种不一致且不换汇，或尚有差额但月存入为零；不把这些情况显示为0个月。该说明通过原有message字段交给后续模型，不增加工具结果字段。最新计算无可用月数且没有其他可用结果时，最终assistant回复直接使用后端说明，不保存模型猜测的月数。其他结果是否可用复用来源提取逻辑：历史须有实际命中的records，行情须有可展示的data（包括标记为stale的旧缓存）；空结果、失败且无数据、因工具上限跳过均不算可用。确有可用历史或行情时保留模型回答和其他工具依据，另列“储蓄计算（后端结果）”；无匹配历史或无可用行情可追加固定提示。正常计算和已达标同样附后端确定结果；已达标明确为0个月。模型补齐参数再算时，以最后一次结构合法的计算结果为准，最终状态说明不累积已经解决的缺项。接口返回与聊天历史保存相同最终正文；原有最终回复事务、成功重放、模型失败与明确重试规则不变。
+
+所有对象拒绝多余字段、重复JSON键、错误类型/精度及非有限数值。每次参数最多4000字符，单项结果最多6000字符，工具后的序列化消息最多CHAT_CONTEXT_CHARS+32000字符。历史查询使用参数化SQL和json_each，仅对摘要各类别数组中的实际文本条目做字面子串匹配（英文不区分大小写，%和_不是通配符），不匹配JSON字段名，也不搜索其他会话原文。同会话/同覆盖范围仅选择最新版本；筛选正文后再按稳定倒序取limit条，不能先截取若干摘要再过滤。正文确实包含confirmed等词时仍可匹配。摘录优先含关键词的条目，最多500个正文字符/记录，带is_excerpt=true和原有来源标识，不承诺完整历史检索。
+
+默认2轮工具、4次执行（无效调用也占预算）、至多3次模型请求。用完后禁止继续调用，若仍返回工具则turn为failed/error.code=tool_limit，无伪造回复。未知工具/非法参数/工具异常返回结构化error给模型，最终文本附固定工具提示；行情失败有旧值时保留旧值、状态和错误。历史/行情成功结果在最终assistant文本追加后端生成的“工具依据”，不依赖模型转述来源、单位和状态的准确性；这是最终回复的一部分，非额外工具消息。MD可识别的HTTP429为rate_limit，其余无明确状态的错误不猜测限流。工具不写SP/CA，只允许MD正常缓存更新；失败重试可能重做工具和外部请求，成功重放始终读取最终已保存结果。usage为每轮都实际提供的同名字段之和，缺失轮次不估算。配置和演示见[README](../README.md#聊天工具与-mvp-演示t08)。
 
 ## 显式对话归档
 
