@@ -9,6 +9,7 @@ from .errors import (
 )
 from .md import MDService
 from .chat import ChatService, ChatSaveError
+from .archive import ArchiveService, ArchiveSaveError
 from .storage import Store
 from .validation import exact_keys
 
@@ -51,8 +52,8 @@ def api_error(exc):
         return error("database_not_ready", "数据库尚未初始化或需要升级，请在项目目录执行 python -m flask --app app:create_app init-db。", 503)
     if isinstance(exc, SchemaError):
         return error("database_schema_error", "数据库结构或版本无法识别，请保留数据并联系维护者检查，不要删库重建。", 503)
-    if isinstance(exc, ChatSaveError):
-        return error("chat_storage_failed", str(exc), 503)
+    if isinstance(exc, (ChatSaveError, ArchiveSaveError)):
+        return error("archive_storage_failed" if isinstance(exc, ArchiveSaveError) else "chat_storage_failed", str(exc), 503)
     if isinstance(exc, StorageError):
         return error("storage_unavailable", "存储暂不可用，请联系维护者检查。", 503)
     if isinstance(exc, HTTPException):
@@ -136,6 +137,25 @@ def summaries(conversation_id):
     return response(store().list_summaries(conversation_id))
 
 
+@api.get("/conversations/<conversation_id>/archive")
+def archive_status(conversation_id):
+    return response(ArchiveService.from_app(current_app).status(conversation_id))
+
+
+@api.post("/conversations/<conversation_id>/archive")
+def archive_generate(conversation_id):
+    value = body("first_sequence", "last_sequence")
+    if any(type(value[key]) is not int for key in value):
+        raise ValidationError("归档范围须为正整数消息序号")
+    return response(ArchiveService.from_app(current_app).generate(conversation_id, **value))
+
+
+@api.post("/conversations/<conversation_id>/archive/<archive_id>/retry")
+def archive_retry(conversation_id, archive_id):
+    body()
+    return response(ArchiveService.from_app(current_app).generate(conversation_id, retry_id=archive_id))
+
+
 @api.get("/overview")
 def overview():
     return response(store().get_overview())
@@ -145,7 +165,9 @@ def overview():
 def changes():
     service = store()
     rows = service.list_changes()
+    archives = service.change_archive_ids()
     for row in rows:
+        row['archive_id'] = archives.get(row['id'])
         row["source_conversation"] = service.get_conversation(row["conversation_id"])
         row["source_message"] = service.get_message(row["source_message_id"])
     return response(rows)
@@ -161,6 +183,12 @@ def confirm_change(change_id):
 def reject_change(change_id):
     body()
     return response(store().reject_change(change_id))
+
+
+@api.post("/profile-change-batches/<archive_id>/confirm")
+def confirm_change_batch(archive_id):
+    value = body('change_ids')
+    return response(store().confirm_change_batch(archive_id, value['change_ids']))
 
 
 @api.get("/market/assets")

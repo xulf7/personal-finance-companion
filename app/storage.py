@@ -287,6 +287,73 @@ class Store:
             )
             return _decoded(_one(conn, "profile_changes", change_id), "operations_json", "operations")
 
+    def change_archive_ids(self):
+        """只读的归档批次关联，供候选页面分组；不改变原有单条对象语义。"""
+        with self._session() as conn:
+            return {r['change_id']: r['archive_id'] for r in conn.execute(
+                "SELECT e.change_id,e.archive_id FROM archive_evidence e JOIN archive_requests a ON a.id=e.archive_id WHERE a.status='succeeded'")}
+
+    def confirm_change_batch(self, archive_id, change_ids):
+        """确认用户已核对的同批次全部剩余候选；一次版本校验、一次档案更新。"""
+        archive_id = identifier(archive_id)
+        if not isinstance(change_ids, list) or not 1 <= len(change_ids) <= 100:
+            raise ValidationError("合并确认须提供1–100个候选标识")
+        selected_ids = [identifier(i) for i in change_ids]
+        if len(set(selected_ids)) != len(selected_ids):
+            raise ValidationError("合并确认的候选标识不得重复")
+        selected_ids = sorted(selected_ids)
+        with self._session(write=True) as conn:
+            archive = _one(conn, 'archive_requests', archive_id)
+            if archive['status'] != 'succeeded':
+                raise InvalidState("只能确认成功归档批次的候选")
+            rows = {r['id']: dict(r) for r in conn.execute(
+                "SELECT p.* FROM profile_changes p JOIN archive_evidence e ON e.change_id=p.id WHERE e.archive_id=?", (archive_id,))}
+            if not set(selected_ids) <= rows.keys():
+                raise ValidationError("候选不属于指定归档批次")
+            chosen = [rows[i] for i in selected_ids]
+            if any(r['conversation_id'] != archive['conversation_id'] for r in chosen):
+                raise InvalidState("候选来源与归档会话不一致")
+            def result():
+                changes = [_decoded(_one(conn, 'profile_changes', i), 'operations_json', 'operations') for i in selected_ids]
+                return {'archive_id': archive_id, 'applied_version': changes[0]['applied_version'],
+                        'changes': changes, 'profile': self._profile(conn)}
+            if all(r['status'] == 'confirmed' for r in chosen):
+                if len({r['applied_version'] for r in chosen}) != 1:
+                    raise InvalidState("这些候选已在不同操作中确认，请重新读取状态")
+                return result()  # 即使SP后来又变化，也不会重新应用或覆盖。
+            if any(r['status'] != 'pending' for r in chosen):
+                raise InvalidState("候选状态已变化，请重新读取批次，先拒绝不想应用的项")
+            if set(selected_ids) != {i for i, row in rows.items() if row['status'] == 'pending'}:
+                raise InvalidState("请核对并确认本批次全部剩余待确认项；不想应用的项请先逐条拒绝")
+            base = json.loads(archive['profile_json'])['version']
+            if any(r['base_version'] != base for r in chosen):
+                raise VersionConflict("同批次候选基于不同档案版本，不能合并确认")
+            values, risk, risk_set, selected_currency = {}, None, False, None
+            for row in chosen:
+                for change in operations(json.loads(row['operations_json'])):
+                    if change['op'] == 'set_finances':
+                        if selected_currency is not None and selected_currency != change['currency']:
+                            raise InvalidState("同批次币种冲突，请先拒绝不想应用的项；不自动换汇")
+                        selected_currency = change['currency']
+                        for field, value in change['values'].items():
+                            if field in values and values[field] != value:
+                                raise InvalidState(f"同批次字段 {field} 有不同目标值，请先拒绝冲突项，再合并确认")
+                            values[field] = value
+                    elif change['op'] == 'set_risk':
+                        if risk_set and risk != change['value']:
+                            raise InvalidState("同批次字段 risk_preference 有不同目标值，请先拒绝冲突项")
+                        risk, risk_set = change['value'], True
+                    else:
+                        raise InvalidState("批次合并只支持归档的基础财务和风险偏好，其他操作请单条处理")
+            merged = ([{'op': 'set_finances', 'currency': selected_currency, 'values': values}] if values else [])
+            if risk_set:
+                merged.append({'op': 'set_risk', 'value': risk})
+            profile = self._apply(conn, operations(merged), base)
+            at = db.now()
+            conn.executemany("UPDATE profile_changes SET status='confirmed',processed_at=?,applied_version=? WHERE id=?",
+                             [(at, profile['version'], i) for i in selected_ids])
+            return result()
+
     def reject_change(self, change_id):
         with self._session(write=True) as conn:
             change = _one(conn, "profile_changes", identifier(change_id))

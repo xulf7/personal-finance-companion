@@ -14,7 +14,7 @@
       <p>管理当前财务档案，保留对话与决策依据，查看市场数据。</p></div>
       <a class="health" href="{{ url_for('pages.health') }}">健康检查</a>
     </header>
-    <p class="notice">对话现支持模型回复，发送或明确重试会调用外部模型、可能计费；聊天行情工具与自动摘要尚未实现，不自动修改档案。行情默认使用虚构样例，可显式选择 AKShare 日线数据。</p>
+    <p class="notice">发送、归档或明确重试会调用外部模型、可能计费；归档可生成历史摘要、跨会话记忆及待确认候选，确认前不改档案。聊天行情工具尚未实现。行情默认使用虚构样例，可显式选择 AKShare 日线数据。</p>
     <nav class="tabs" role="tablist" aria-label="业务导航">
       <button id="tab-profile" role="tab" aria-selected="true" aria-controls="panel-profile" data-tab="profile">财务档案</button>
       <button id="tab-chat" role="tab" aria-selected="false" aria-controls="panel-chat" tabindex="-1" data-tab="chat">对话记录</button>
@@ -58,13 +58,15 @@
       <p id="chat-status" role="status" aria-live="polite"></p>
       <div id="messages" class="messages" aria-label="历史消息"></div>
       <form id="message-form"><label>用户问题<textarea id="message-text" rows="3" required maxlength="4000" disabled></textarea></label><p class="hint">发送时提供当前档案、历史决策概览和本会话近期消息。模型尚无聊天行情工具；不会自动修改档案、摘要或候选。失败请重试原问题，避免重新发送。</p><button id="message-send" type="submit" disabled>发送并获取回复</button></form>
+      <div class="actions"><button id="archive-generate" type="button" class="secondary" disabled>生成归档摘要</button></div>
+      <p id="archive-status" role="status" aria-live="polite">选择会话后检查可归档范围。</p>
       <details><summary>查看会话摘要</summary><p class="hint">摘要中的“当时确认”属于历史记录，当前状态请以财务档案为准。</p><div id="summaries"></div></details>
       <details><summary>查看历史决策概览 CA Overview</summary><div id="overview"></div></details>
     </section>
 
     <section id="panel-changes" role="tabpanel" aria-labelledby="tab-changes" hidden>
       <div class="section-heading"><h2>财务变更候选</h2><button id="changes-reload" type="button" class="secondary">重新读取候选</button></div>
-      <p class="hint">请核对来源与具体修改后再确认。查看页面不会修改 SP；历史摘要和消息也不会自动覆盖当前档案。</p>
+      <p class="hint">请核对来源与具体修改。同批次先逐条拒绝不想应用的项，再合并确认剩余项；查看页面不会修改 SP，历史摘要也不会覆盖当前档案。</p>
       <p id="changes-status" role="status" aria-live="polite"></p><div id="changes-list"></div>
     </section>
 
