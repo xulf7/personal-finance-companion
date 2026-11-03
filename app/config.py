@@ -15,6 +15,10 @@ class Config:
     DATABASE_PATH = DATA_DIR / "app.sqlite3"
     MD_CACHE_TTL_SECONDS = 300
     MD_PROVIDER_ID = "mock-fixed-v1"
+    CHAT_RECENT_MESSAGES = 12
+    CHAT_CONTEXT_CHARS = 16000
+    CHAT_MAX_TOKENS = 1024
+    CHAT_TIMEOUT_SECONDS = 60
 
     @staticmethod
     def provider_id():

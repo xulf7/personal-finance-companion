@@ -1,4 +1,4 @@
-# T04 HTTP 接口
+# 业务 HTTP 接口
 
 所有业务地址使用同源 `/api` 前缀，无宽泛 CORS。接口复用 Store 和 MDService，不在路由中实现 SQL、版本更新或候选状态转换。`GET /` 返回网页，`GET /health` 仅表示 Web 存活，两者不连接业务数据库或提供器。
 
@@ -54,9 +54,25 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 | `GET /api/conversations/<id>/summaries` | 按版本排列的已有摘要，含覆盖序号闭区间和内容结构 |
 | `GET /api/overview` | 最新 CA Overview，无记录时 data 为 null |
 
-消息角色由服务端固定为 user；请求即使传 `role:"user"` 也因额外字段返回 400，assistant/system/tool 同样不允许。成功只保存原文，不插入回复、摘要或候选；用户主动再次发送同一文本是另一条有效消息。网页在请求期间锁定发送按钮并绑定点击时的会话 ID，失败保留文本，较晚的旧会话读取不会覆盖新会话。
+原文 POST 的角色仍由服务端固定为 user；请求即使传 role:user 也返回 400，成功只保存原文，不调用模型或生成摘要/候选。用户主动再次发送同一文本是另一条原始消息。会话有未完成聊天时，原文接口返回 409 防止插队。网页聊天改用下述专用接口，避免重复保存用户消息。
 
 消息结果包含 id、conversation_id、sequence、role、content 和 created_at。摘要保留 version、first_sequence、last_sequence、content；Overview 保留 version、content 和 summary_ids。它们都是历史解释，不代表最新 SP。HTTP 不提供原始消息修改、摘要/Overview 写入或自动摘要入口。网页使用 textContent 安全显示原文，不把原文作为 HTML。
+
+## 模型聊天
+
+| 方法与路径 | 请求 / 返回 |
+| --- | --- |
+| `GET /api/conversations/<id>/chat` | 返回 messages（稳定序号）和 turns（聊天请求状态），只读，不读取密钥或调用模型 |
+| `POST /api/conversations/<id>/chat` | 仅 `{"content":"问题","request_id":"稳定标识"}`，保存问题、调用模型并保存回复 |
+| `POST /api/conversations/<id>/chat/<request_id>/retry` | JSON `{}`，明确重试失败/占用期已结束的原问题，不新增用户消息 |
+
+业务层是 `ChatService`。content 最多 4000 字符；请求 ID 使用原有 1–100 字符标识规则，网页生成 UUID。客户端不能指定 role、system、模型、密钥或任意上下文。用户问题只保存一次，调用模型期间不持写事务，助手消息和成功状态在同一事务保存。成功的相同请求或重复重试直接返回保存结果；同 ID 不同会话/文本为 409。新请求遇到未完成问题同样 409，不同会话可并行。
+
+成功 HTTP 包装 `{"data":turn}`；turn 包含 id、conversation_id、status、can_retry、真实 user_message、assistant_message（尚无则 null）、model、usage、error、lease_until、updated_at。status 为 running/failed/succeeded，GET 将占用期结束但未确认完成的 running 显示为 interrupted；不在 GET 中更新数据库。usage 仅服务端提供的输入/输出/总计，可能 null，不估算。
+
+模型失败或回复保存失败仍可返回 HTTP 200 的 turn，必须检查 status/error，不能把 HTTP 成功当聊天成功。failed 保留原文且不存假助手消息；save_failed 明确“已取得模型回复但未保存”，重试可能再次计费。若处理状态也无法保存，则返回 503/chat_storage_failed，须重读会话确认，不反复发送。running 默认至少占用 180 秒，未到期同请求不再调用；过期后必须明确重试，新 attempt_id 阻止迟到旧回复覆盖。没有自动重试、后台恢复或精确的外部计费一次性保证。
+
+上下文为后端固定 system、精简 SP、可选最新 Overview、当前会话近期消息与本次问题；限制和配置见 README。SP/Overview 以数据消息提供，不提升为 system，不混入其他会话原文。原有 SP/摘要/Overview/候选状态不因聊天改变。模型异常不记录原始响应或认证信息，输出密钥会替换脱敏；文本用 textContent 渲染，不作为 HTML。
 
 ## 财务候选
 
@@ -112,4 +128,4 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 ## 上手与检查
 
-初始化、演示、启动和隔离人工检查步骤统一见 [README](../README.md#网页使用)。结构版本仍为 2，001/002 未改；没有重置、清库、执行任意命令、注册登录、模型调用或交易接口。
+初始化、演示、启动和隔离人工检查步骤统一见 [README](../README.md#网页使用)。结构版本为 3，仅新增 003 聊天迁移，001/002 未改；无重置、清库、执行任意命令、注册登录或交易接口。

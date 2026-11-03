@@ -8,7 +8,7 @@
   const labels = {income: "每月收入", expenses: "每月支出", cash: "当前现金", debt: "当前负债", savings_budget: "每月储蓄预算", investment_budget: "每月投资预算"};
   const riskNames = {low: "低风险", medium: "中等风险", high: "高风险"};
   const summaryNames = {facts: "重要事实", decisions: "历史决策", reasons: "原因", plans: "假设或计划", confirmed: "当时确认的状态（不等于当前档案）", todos: "待办", unresolved: "未决事项"};
-  const state = {profile: null, dirty: false, saving: false, profileRequest: 0, conversations: [], active: "", sessionRequest: 0, listRequest: 0, sending: false, drafts: new Map(), changesRequest: 0, market: new Map(), loaded: new Set()};
+  const state = {profile: null, dirty: false, saving: false, profileRequest: 0, conversations: [], active: "", sessionRequest: 0, listRequest: 0, sending: false, drafts: new Map(), chatTurns: new Map(), chatRequests: new Map(), changesRequest: 0, market: new Map(), loaded: new Set()};
 
   function node(tag, content, className) {
     const item = document.createElement(tag);
@@ -216,13 +216,36 @@
     if (!conversationId) { $("messages").replaceChildren(node("p", "暂无会话，请先新建会话。", "empty")); say("chat-status", ""); return; }
     say("chat-status", "正在读取会话…");
     try {
-      const [messages, summaries] = await Promise.all([api(`/conversations/${encodeURIComponent(conversationId)}/messages`), api(`/conversations/${encodeURIComponent(conversationId)}/summaries`)]);
+      const [history, summaries] = await Promise.all([api(`/conversations/${encodeURIComponent(conversationId)}/chat`), api(`/conversations/${encodeURIComponent(conversationId)}/summaries`)]);
       if (ticket !== state.sessionRequest || conversationId !== state.active) return;
+      const {messages, turns} = history;
+      state.chatTurns.set(conversationId, turns);
+      const unfinished = turns.find((turn) => turn.status !== "succeeded");
+      const turnFor = new Map(turns.map((turn) => [turn.user_message.id, turn]));
+      const uncertain = state.chatRequests.get(conversationId);
+      if (uncertain && turns.some((turn) => turn.id === uncertain.id)) {
+        state.chatRequests.delete(conversationId);
+        if (state.drafts.get(conversationId) === uncertain.content) state.drafts.set(conversationId, "");
+        if ($("message-text").value === uncertain.content) $("message-text").value = state.drafts.get(conversationId) || "";
+      }
       $("messages").replaceChildren();
       if (!messages.length) $("messages").append(node("p", "当前会话还没有消息。", "empty"));
       for (const message of messages) {
-        const row = node("article", undefined, "message");
-        row.append(node("p", `#${message.sequence} · ${{user: "用户", assistant: "助手（历史记录）", system: "系统（历史记录）", tool: "工具（历史记录）"}[message.role]} · ${time(message.created_at)}`, "meta"), node("p", message.content, "preserve-text"));
+        const row = node("article", undefined, `message message-${message.role}`);
+        row.append(node("p", `#${message.sequence} · ${{user: "用户", assistant: "助手", system: "系统（历史记录）", tool: "工具（历史记录）"}[message.role]} · ${time(message.created_at)}`, "meta"), node("p", message.content, "preserve-text"));
+        const turn = turnFor.get(message.id);
+        if (turn?.status === "running") row.append(node("p", `正在等待模型回复；可重新读取会话。若服务中断，${time(turn.lease_until)} 后可明确重试。`, "feedback warning"));
+        if (turn?.error) row.append(node("p", `尚无已保存的助手回复：${turn.error.message}`, "feedback error"));
+        if (turn?.can_retry) {
+          const retry = node("button", "重试这条问题（可能计费）", "secondary");
+          retry.disabled = state.sending;
+          retry.addEventListener("click", () => sendChat(conversationId, null, turn.id));
+          row.append(retry);
+        }
+        if (message.role === "assistant") {
+          const source = turns.find((item) => item.assistant_message?.id === message.id);
+          if (source) row.append(node("p", `模型：${source.model || "响应未提供"} · Token：${source.usage ? Object.entries(source.usage).map(([k, v]) => `${k}=${v}`).join("，") : "响应未提供，不估算"}`, "meta"));
+        }
         $("messages").append(row);
       }
       if (!summaries.length) $("summaries").append(node("p", "暂无摘要。保存消息不会自动生成摘要。", "empty"));
@@ -231,7 +254,9 @@
         detail.append(node("summary", `摘要第 ${summary.version} 版 · 覆盖消息 #${summary.first_sequence}–#${summary.last_sequence}`));
         drawSummary(detail, summary.content); $("summaries").append(detail);
       }
-      say("chat-status", `已读取 ${messages.length} 条原始消息。`, "success");
+      $("message-send").disabled = state.sending || !!unfinished;
+      $("message-text").disabled = !!unfinished;
+      say("chat-status", unfinished ? "当前问题未完成，请等待或使用原问题的重试按钮；原文已保存。" : `已读取 ${messages.length} 条消息。发送问题会调用模型。`, unfinished ? "warning" : "success");
     } catch (error) { if (ticket === state.sessionRequest && conversationId === state.active) { $("messages").replaceChildren(); say("chat-status", error.message, "error"); } }
   }
   function selectConversation(id) {
@@ -274,22 +299,35 @@
     finally { button.disabled = false; }
   });
   $("message-text").addEventListener("input", () => { if (state.active) state.drafts.set(state.active, $("message-text").value); });
+  async function sendChat(id, content, retryId = null) {
+    if (state.sending || !id) return;
+    if (retryId && !await confirmAction("重试原问题", "将使用已保存的用户原文重新请求模型，不再插入用户消息；可能再次计费。")) return;
+    if (state.sending) return;
+    const title = state.conversations.find((c) => c.id === id)?.title || "原会话";
+    if (!retryId) state.drafts.set(id, content);
+    const previous = state.chatRequests.get(id);
+    const request = retryId ? null : (previous?.content === content ? previous : {id: crypto.randomUUID(), content});
+    if (request) state.chatRequests.set(id, request); // HTTP 结果不确定时再次提交沿用同一标识。
+    state.sending = true; $("message-send").disabled = true;
+    say("chat-status", "正在等待模型回复，请勿重复点击…");
+    try {
+      const base = `/conversations/${encodeURIComponent(id)}/chat`;
+      const turn = retryId ? await api(`${base}/${encodeURIComponent(retryId)}/retry`, "POST", {}) : await api(base, "POST", {content, request_id: request.id});
+      if (request) state.chatRequests.delete(id);
+      if (!retryId && state.drafts.get(id) === content) state.drafts.set(id, "");
+      if (state.active === id) $("message-text").value = state.drafts.get(id) || "";
+      say("app-status", turn.status === "succeeded" ? `「${title}」的用户消息与助手回复均已保存。` : `「${title}」尚未取得已保存的回复；请查看原问题状态。`, turn.status === "succeeded" ? "success" : "warning");
+    } catch (error) {
+      say("app-status", `${error.message} 请重新读取会话确认状态；若原请求尚未保存，再次发送相同草稿会沿用请求标识。`, "error");
+    } finally {
+      state.sending = false;
+      if (state.active) await loadSession(state.active);
+    }
+  }
   $("message-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (state.sending || !state.active) return;
-    const id = state.active; // 固定点击时的会话，不随选择框变化。
-    const content = $("message-text").value;
-    const title = state.conversations.find((c) => c.id === id)?.title || "原会话";
-    state.drafts.set(id, content);
-    state.sending = true; $("message-send").disabled = true;
-    say("chat-status", "正在保存消息…");
-    try {
-      await api(`/conversations/${encodeURIComponent(id)}/messages`, "POST", {content});
-      if (state.drafts.get(id) === content) state.drafts.set(id, "");
-      if (state.active === id) { $("message-text").value = state.drafts.get(id) || ""; await loadSession(id); }
-      say("app-status", `消息已保存到「${title}」。未生成助手回复。`, "success");
-    } catch (error) { say("app-status", error.message, "error"); }
-    finally { state.sending = false; $("message-send").disabled = !state.active; }
+    if (state.sending || !state.active || $("message-send").disabled) return;
+    await sendChat(state.active, $("message-text").value);
   });
 
   function describeOperations(operations) {

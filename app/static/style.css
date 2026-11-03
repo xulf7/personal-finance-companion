@@ -46,6 +46,8 @@ legend { font-weight: 650; margin-bottom: 14px; }
 .messages { max-height: 470px; overflow-y: auto; padding-right: 8px; }
 .message { border-bottom: 1px solid #e2e8ee; padding: 8px 0; }
 .message .meta { margin-bottom: 8px; }
+.message-user { border-left: 3px solid #718da5; padding-left: 12px; }
+.message-assistant { border-left: 3px solid #48816a; padding-left: 12px; background: #f3f8f5; }
 .preserve-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty { color: #65788b; padding: 12px 0; }
 details { border-top: 1px solid #dfe6ed; padding: 15px 0; margin-top: 18px; }

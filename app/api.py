@@ -8,6 +8,7 @@ from .errors import (
     ValidationError, VersionConflict,
 )
 from .md import MDService
+from .chat import ChatService, ChatSaveError
 from .storage import Store
 from .validation import exact_keys
 
@@ -50,6 +51,8 @@ def api_error(exc):
         return error("database_not_ready", "数据库尚未初始化或需要升级，请在项目目录执行 python -m flask --app app:create_app init-db。", 503)
     if isinstance(exc, SchemaError):
         return error("database_schema_error", "数据库结构或版本无法识别，请保留数据并联系维护者检查，不要删库重建。", 503)
+    if isinstance(exc, ChatSaveError):
+        return error("chat_storage_failed", str(exc), 503)
     if isinstance(exc, StorageError):
         return error("storage_unavailable", "存储暂不可用，请联系维护者检查。", 503)
     if isinstance(exc, HTTPException):
@@ -109,6 +112,23 @@ def messages(conversation_id):
 def create_message(conversation_id):
     value = body("content")
     return response(store().add_message(conversation_id, "user", value["content"]), 201)
+
+
+@api.get("/conversations/<conversation_id>/chat")
+def chat_history(conversation_id):
+    return response(ChatService.from_app(current_app).history(conversation_id))
+
+
+@api.post("/conversations/<conversation_id>/chat")
+def chat_send(conversation_id):
+    value = body("content", "request_id")
+    return response(ChatService.from_app(current_app).send(conversation_id, value["content"], value["request_id"]))
+
+
+@api.post("/conversations/<conversation_id>/chat/<request_id>/retry")
+def chat_retry(conversation_id, request_id):
+    body()
+    return response(ChatService.from_app(current_app).retry(conversation_id, request_id))
 
 
 @api.get("/conversations/<conversation_id>/summaries")
