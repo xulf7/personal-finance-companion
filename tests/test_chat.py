@@ -223,7 +223,7 @@ class ChatMigrationTests(StorageCase):
     def test_v2_upgrade_preserves_sp_ca_md_and_valid_backup_reinitialize(self):
         self.old_database();before=self.snapshot(self.database)
         result=self.initialize()
-        self.assertEqual(result['version'],3)
+        self.assertEqual(result['version'],len(db.migration_files()))
         self.assertEqual(self.snapshot(result['backup']),before)
         after=self.snapshot(self.database)
         self.assertEqual({k:after[k] for k in before},before)

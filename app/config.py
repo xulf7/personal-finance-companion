@@ -19,6 +19,8 @@ class Config:
     CHAT_CONTEXT_CHARS = 16000
     CHAT_MAX_TOKENS = 1024
     CHAT_TIMEOUT_SECONDS = 60
+    ARCHIVE_MAX_MESSAGES = 20
+    ARCHIVE_MAX_CHARS = 24000
 
     @staticmethod
     def provider_id():

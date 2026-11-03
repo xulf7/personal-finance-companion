@@ -1,6 +1,6 @@
 # 业务 HTTP 接口
 
-所有业务地址使用同源 `/api` 前缀，无宽泛 CORS。接口复用 Store 和 MDService，不在路由中实现 SQL、版本更新或候选状态转换。`GET /` 返回网页，`GET /health` 仅表示 Web 存活，两者不连接业务数据库或提供器。
+所有业务地址使用同源 `/api` 前缀，无宽泛 CORS。接口复用 Store、MDService、ChatService 和 ArchiveService，不在路由中实现 SQL、版本更新或候选状态转换。`GET /` 返回网页，`GET /health` 仅表示 Web 存活，两者不连接业务数据库或提供器。
 
 ## 通用约定
 
@@ -56,7 +56,7 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 原文 POST 的角色仍由服务端固定为 user；请求即使传 role:user 也返回 400，成功只保存原文，不调用模型或生成摘要/候选。用户主动再次发送同一文本是另一条原始消息。会话有未完成聊天时，原文接口返回 409 防止插队。网页聊天改用下述专用接口，避免重复保存用户消息。
 
-消息结果包含 id、conversation_id、sequence、role、content 和 created_at。摘要保留 version、first_sequence、last_sequence、content；Overview 保留 version、content 和 summary_ids。它们都是历史解释，不代表最新 SP。HTTP 不提供原始消息修改、摘要/Overview 写入或自动摘要入口。网页使用 textContent 安全显示原文，不把原文作为 HTML。
+消息结果包含 id、conversation_id、sequence、role、content 和 created_at。摘要保留 version、first_sequence、last_sequence、content；Overview 保留 version、content 和 summary_ids。它们都是历史解释，不代表最新 SP。HTTP 不提供原始消息修改或任意摘要/Overview 写入，生成只能走下述显式归档。网页使用 textContent 安全显示原文，不把原文作为 HTML。
 
 ## 模型聊天
 
@@ -74,6 +74,28 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 上下文为后端固定 system、精简 SP、可选最新 Overview、当前会话近期消息与本次问题；限制和配置见 README。SP/Overview 以数据消息提供，不提升为 system，不混入其他会话原文。原有 SP/摘要/Overview/候选状态不因聊天改变。模型异常不记录原始响应或认证信息，输出密钥会替换脱敏；文本用 textContent 渲染，不作为 HTML。
 
+## 显式对话归档
+
+业务入口为 `ArchiveService.from_app(app)`，或可注入 model/clock 的 `ArchiveService(database_path)`；status(conversation_id) 只读，generate(conversation_id, first_sequence=..., last_sequence=...) 发起归档，generate(conversation_id, retry_id=...) 明确重试。
+
+| 方法与路径 | 请求 / 返回 |
+| --- | --- |
+| `GET /api/conversations/<id>/archive` | 返回 latest（最新成功结果）、pending（未完成结果）、can_archive、next_range、notice；不读取密钥/联网/写库 |
+| `POST /api/conversations/<id>/archive` | 仅 `{"first_sequence":1,"last_sequence":2}`，使用 GET 的 next_range；后端核验为下一完整分段或已有范围 |
+| `POST /api/conversations/<id>/archive/<archive_id>/retry` | JSON `{}`，明确重试失败/占用期结束的原范围 |
+
+消息范围为正整数闭区间，不接受布尔值。客户端不能传摘要、候选、提示词、角色、密钥或任意历史。可归档内容及边界见 README；可选 Python 直接调用不传范围时由后端选择下一段，HTTP 强制携带范围，以便相同批次重复点击幂等。过时范围为409；对象不存在404。
+
+返回 `data` 为归档结果：id、conversation_id、first_sequence、last_sequence、status、can_retry、lease_until、summary、overview_id、citations（与摘要各类条目一一对应的消息 ID 列表）、candidate_count（本次新建数）、change_ids（关联候选，含复用的旧候选）、model、usage、error。status 为 running/failed/succeeded，过期 running 只读显示 interrupted。失败仍可能 HTTP200，必须看 status/error；候选后续确认/拒绝的当前状态应从候选接口读取。
+
+成功的相同范围返回保存结果，不调用模型；失败须原 ID 的明确重试。未到180秒占用期限不再次请求，过期换尝试令牌，迟到回复不写入。不同会话并行完成时，在短事务内基于最新 Overview 来源合并，不覆盖先完成的其他会话。模型或校验失败仅保存固定错误，提交失败整体回滚；状态也不能保存时为503/archive_storage_failed。外部可能已计费，不承诺计费恰好一次。
+
+归档仅创建pending候选，复用确认/拒绝流程。模型负责理解意图与规范化数值；后端检查单条候选的操作/字段/类型/精度/币种契约，以及本批已保存的user消息ID和完整原文引用，不从正文再次提取金额或意图。非法字段、金额、币种或来源仅跳过该候选，其他合法候选与摘要继续保存；整个响应或摘要结构/引用无效仍走失败流程。来源真实不等于模型语义正确，必须由用户在确认界面同时核对拟写值和原文。
+
+候选模型输出沿用 `{source_message_id,evidence,operations}`。仅支持set_finances和set_risk；金额为币种基本单位的十进制字符串或null，currency单独返回。例如CNY下“900，单位是万元”应由模型返回 `{"op":"set_finances","currency":"CNY","values":{"investment_budget":"9000000"}}`。后端不会从原文验证这次换算是否正确；会通过既有Decimal规则转为 `"9000000.00"` 待用户确认。金额字符串不能含符号、千分位、倍率或需要舍入的精度，不接受JSON数值；未知为null、零为 `"0"`。重复来源保留首个通过契约校验的候选（含无变化项），无变化字段过滤，数据库来源去重继续有效。
+
+模型输入只含本次完成轮次和精简确认SP，不扫描其他会话原文。摘要/Overview/合法候选一次提交，原始消息和SP不变；GET或普通聊天均不会自动归档。Overview部分覆盖和100来源保留规则见数据模型；历史memory_limit失败记录可按同一ID明确重试，无需改库。HTTP确认接口与版本、事务规则不变。
+
 ## 财务候选
 
 | 方法与路径 | 请求 / 返回 |
@@ -81,10 +103,15 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 | `GET /api/profile-changes` | 全部候选，含 operations、来源 ID、base_version、status、创建/处理时间及 applied_version |
 | `POST /api/profile-changes/<id>/confirm` | JSON `{}`，明确确认，返回处理结果 |
 | `POST /api/profile-changes/<id>/reject` | JSON `{}`，明确拒绝，返回处理结果 |
+| `POST /api/profile-change-batches/<archive_id>/confirm` | 仅 `{"change_ids":["候选ID1","候选ID2"]}`，合并确认指定归档批次全部剩余待确认项 |
 
-列表额外组织 `source_conversation`（会话对象）与 `source_message`（来源用户消息），便于界面直接展示依据；确认/拒绝结果沿用服务对象，不附加这些展示字段。没有 HTTP 创建候选或通用编辑器，本轮演示使用 seed-demo 的已有记录。
+列表额外组织 `source_conversation`（会话对象）、`source_message`（来源用户消息）及 `archive_id`（成功归档批次，无关联时null），便于界面直接展示依据并分组；单条确认/拒绝结果沿用服务对象，不附加这些展示字段。没有任意创建候选或通用编辑器接口；候选可来自既有 seed-demo 或显式归档，后者须经过来源引用与输出契约校验，不证明模型语义正确。
 
 只有 pending 可进入 confirmed/rejected。重复确认 confirmed 或重复拒绝 rejected 返回原结果，不重复执行。拒绝后确认、确认后拒绝均为 409；基于旧 SP 版本的候选确认返回 version_conflict，仍保留待确认状态。浏览器确认前再次列出具体修改，成功后读取当前档案和候选状态；仅查看不处理候选。
+
+合并服务入口 `Store.confirm_change_batch(archive_id, change_ids)`；列表关联来自只读 `Store.change_archive_ids()`。change_ids为1–100个不重复标识，必须属于成功的同一归档批次；除幂等读取已确认集合外，必须恰好等于当前全部pending项。用户不想应用的项应先用原拒绝接口处理，再读取列表并提交余项。重复ID/跨批次为400，批次不存在404，状态或选择过时、同字段不同目标值为409/invalid_state，SP基准已变化为409/version_conflict。
+
+成功返回 `data:{archive_id,applied_version,changes,profile}`。changes为本次集合的已确认候选；profile是响应时读取的当前SP。相同字段/目标值合并去重，互不冲突字段一起通过原 `_apply` 更新，SP有效变化只增加一个版本，所有项获得相同applied_version。确认过程中任意写入失败则全部回滚。相同集合重复提交时若已确认且applied_version一致，返回已应用结果，不因SP后来变化再次覆盖；返回profile可能已被后续操作更新，历史结果以applied_version为准。单条接口不变，不自动重基准；已单条确认部分候选后，其余旧版本仍受保护。
 
 ## 市场数据（mock / AKShare）
 
@@ -128,4 +155,4 @@ PATCH 示例（虚构修改，需使用实际读取到的版本）：
 
 ## 上手与检查
 
-初始化、演示、启动和隔离人工检查步骤统一见 [README](../README.md#网页使用)。结构版本为 3，仅新增 003 聊天迁移，001/002 未改；无重置、清库、执行任意命令、注册登录或交易接口。
+初始化、演示、启动和隔离人工检查步骤统一见 [README](../README.md#网页使用)。结构版本为 4，本轮仅新增 004 归档迁移，001–003 未改；无重置、清库、执行任意命令、注册登录或交易接口。

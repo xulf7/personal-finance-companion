@@ -8,7 +8,7 @@
   const labels = {income: "每月收入", expenses: "每月支出", cash: "当前现金", debt: "当前负债", savings_budget: "每月储蓄预算", investment_budget: "每月投资预算"};
   const riskNames = {low: "低风险", medium: "中等风险", high: "高风险"};
   const summaryNames = {facts: "重要事实", decisions: "历史决策", reasons: "原因", plans: "假设或计划", confirmed: "当时确认的状态（不等于当前档案）", todos: "待办", unresolved: "未决事项"};
-  const state = {profile: null, dirty: false, saving: false, profileRequest: 0, conversations: [], active: "", sessionRequest: 0, listRequest: 0, sending: false, drafts: new Map(), chatTurns: new Map(), chatRequests: new Map(), changesRequest: 0, market: new Map(), loaded: new Set()};
+  const state = {profile: null, dirty: false, saving: false, profileRequest: 0, conversations: [], active: "", sessionRequest: 0, listRequest: 0, sending: false, archiving: false, archives: new Map(), drafts: new Map(), chatTurns: new Map(), chatRequests: new Map(), changesRequest: 0, changesBusy: false, market: new Map(), loaded: new Set()};
 
   function node(tag, content, className) {
     const item = document.createElement(tag);
@@ -213,12 +213,23 @@
     const ticket = ++state.sessionRequest;
     $("messages").replaceChildren(node("p", "正在读取消息…", "empty"));
     $("summaries").replaceChildren();
-    if (!conversationId) { $("messages").replaceChildren(node("p", "暂无会话，请先新建会话。", "empty")); say("chat-status", ""); return; }
+    $("archive-generate").disabled = true;
+    say("archive-status", "正在检查可归档范围…");
+    if (!conversationId) { $("messages").replaceChildren(node("p", "暂无会话，请先新建会话。", "empty")); say("chat-status", ""); say("archive-status", "选择会话后检查可归档范围。"); return; }
     say("chat-status", "正在读取会话…");
     try {
-      const [history, summaries] = await Promise.all([api(`/conversations/${encodeURIComponent(conversationId)}/chat`), api(`/conversations/${encodeURIComponent(conversationId)}/summaries`)]);
+      const base = `/conversations/${encodeURIComponent(conversationId)}`;
+      const [history, summaries, archive] = await Promise.all([api(`${base}/chat`), api(`${base}/summaries`), api(`${base}/archive`)]);
       if (ticket !== state.sessionRequest || conversationId !== state.active) return;
       const {messages, turns} = history;
+      state.archives.set(conversationId, archive);
+      const pendingArchive = archive.pending;
+      const latestArchive = archive.latest;
+      const previousArchive = latestArchive ? `已归档 #${latestArchive.first_sequence}–#${latestArchive.last_sequence}，摘要第 ${latestArchive.summary.version} 版，新建 ${latestArchive.candidate_count} 个待确认项（来源及当前状态见待确认变更页）。` : "";
+      const archiveButton = $("archive-generate");
+      archiveButton.textContent = pendingArchive?.can_retry ? "重试归档（可能计费）" : "生成归档摘要";
+      archiveButton.disabled = state.archiving || !(pendingArchive?.can_retry || archive.can_archive);
+      say("archive-status", state.archiving ? "正在归档，请勿重复点击；可继续查看会话。" : pendingArchive ? `${previousArchive} ${pendingArchive.error?.message || `正在归档 #${pendingArchive.first_sequence}–#${pendingArchive.last_sequence}；可重新读取状态，服务中断后 ${time(pendingArchive.lease_until)} 起可明确重试。`}` : `${previousArchive} ${archive.next_range ? `下次范围 #${archive.next_range.first_sequence}–#${archive.next_range.last_sequence}。` : ""} ${archive.notice}`, pendingArchive?.error ? "error" : latestArchive ? "success" : "");
       state.chatTurns.set(conversationId, turns);
       const unfinished = turns.find((turn) => turn.status !== "succeeded");
       const turnFor = new Map(turns.map((turn) => [turn.user_message.id, turn]));
@@ -248,16 +259,17 @@
         }
         $("messages").append(row);
       }
-      if (!summaries.length) $("summaries").append(node("p", "暂无摘要。保存消息不会自动生成摘要。", "empty"));
+      if (!summaries.length) $("summaries").append(node("p", "暂无摘要。完整轮次可点击生成归档摘要；普通发送不会自动归档。", "empty"));
       for (const summary of summaries) {
         const detail = node("details");
+        detail.open = summary.id === latestArchive?.summary?.id;
         detail.append(node("summary", `摘要第 ${summary.version} 版 · 覆盖消息 #${summary.first_sequence}–#${summary.last_sequence}`));
         drawSummary(detail, summary.content); $("summaries").append(detail);
       }
       $("message-send").disabled = state.sending || !!unfinished;
       $("message-text").disabled = !!unfinished;
       say("chat-status", unfinished ? "当前问题未完成，请等待或使用原问题的重试按钮；原文已保存。" : `已读取 ${messages.length} 条消息。发送问题会调用模型。`, unfinished ? "warning" : "success");
-    } catch (error) { if (ticket === state.sessionRequest && conversationId === state.active) { $("messages").replaceChildren(); say("chat-status", error.message, "error"); } }
+    } catch (error) { if (ticket === state.sessionRequest && conversationId === state.active) { $("messages").replaceChildren(); say("chat-status", error.message, "error"); say("archive-status", `无法读取归档状态：${error.message}`, "error"); } }
   }
   function selectConversation(id) {
     if (state.active) state.drafts.set(state.active, $("message-text").value);
@@ -330,9 +342,35 @@
     await sendChat(state.active, $("message-text").value);
   });
 
+  $("archive-generate").addEventListener("click", async () => {
+    const id = state.active;
+    const archive = state.archives.get(id);
+    if (!id || !archive || state.archiving || $("archive-generate").disabled) return;
+    const retry = archive.pending?.can_retry ? archive.pending.id : null;
+    if (!await confirmAction(retry ? "明确重试归档？" : "生成归档摘要？", "将调用外部模型，可能计费。保存结构化摘要和跨会话记忆；有可核对依据时仅生成待确认候选，确认前不改变财务档案。")) return;
+    if (state.archiving) return;
+    state.archiving = true;
+    $("archive-generate").disabled = true;
+    say("archive-status", "正在生成并校验归档摘要，请勿重复点击…");
+    try {
+      const base = `/conversations/${encodeURIComponent(id)}/archive`;
+      const result = retry ? await api(`${base}/${encodeURIComponent(retry)}/retry`, "POST", {}) : await api(base, "POST", archive.next_range);
+      say("app-status", result.status === "succeeded" ? `归档成功：消息 #${result.first_sequence}–#${result.last_sequence}，新建 ${result.candidate_count} 个待确认项。当前档案未改变。` : result.error?.message || "归档仍在处理中，请重新读取状态。", result.status === "succeeded" ? "success" : "warning");
+      state.loaded.delete("changes");
+      if (state.active === id) $("summaries").parentElement.open = true;
+    } catch (error) {
+      say("app-status", `${error.message} 原聊天及先前归档保留，请重新读取会话确认状态。`, "error");
+    } finally {
+      state.archiving = false;
+      if (state.active) await loadSession(state.active);
+      await loadOverview();
+      if (!$("panel-changes").hidden) await loadChanges();
+    }
+  });
+
   function describeOperations(operations) {
     return operations.map((change) => {
-      if (change.op === "set_finances") return Object.entries(change.values).map(([key, value]) => `${labels[key] || key}：${shown(value)} ${change.currency}`).join("\n");
+      if (change.op === "set_finances") return Object.entries(change.values).map(([key, value]) => `${labels[key] || key}：${value === null ? "未知（清空该数值）" : shown(value)} ${change.currency}`).join("\n");
       if (change.op === "set_risk") return `风险偏好：${riskNames[change.value] || "未填写"}`;
       if (change.op === "set_goal") { const g = change.goal; return `保存财务目标：${g.name}\n目标金额：${shown(g.target_amount)} ${g.currency}\n目标日期：${shown(g.target_date)}`; }
       if (change.op === "set_holding") { const h = change.holding; return `保存持仓：${h.asset_code}\n数量：${shown(h.quantity)}\n单位成本：${shown(h.unit_cost)} ${h.currency}`; }
@@ -341,6 +379,15 @@
       return `删除${change.op === "remove_goal" ? "财务目标" : "持仓"}：${found?.name || found?.asset_code || `编号 ${change.id}`}`;
     }).join("\n\n");
   }
+  function setChangesBusy(value) {
+    state.changesBusy = value;
+    $("changes-list").querySelectorAll("button").forEach((button) => { button.disabled = value; });
+  }
+  function beginChangesOperation() {
+    setChangesBusy(true);
+    say("app-status", "");
+    say("changes-status", "");
+  }
   async function loadChanges() {
     const ticket = ++state.changesRequest;
     say("changes-status", "正在读取候选…");
@@ -348,34 +395,71 @@
       const rows = await api("/profile-changes");
       if (ticket !== state.changesRequest) return;
       $("changes-list").replaceChildren();
-      if (!rows.length) $("changes-list").append(node("p", "暂无候选。当前不会从用户消息自动提取变更。", "empty"));
+      if (!rows.length) $("changes-list").append(node("p", "暂无候选。可在对话记录中显式归档，生成有原文依据的候选。", "empty"));
+      const batches = new Map();
+      for (const change of rows) {
+        if (change.archive_id && !batches.has(change.archive_id)) {
+          const members = rows.filter((row) => row.archive_id === change.archive_id);
+          const pending = members.filter((row) => row.status === "pending");
+          const group = node("article", undefined, "card");
+          group.append(node("h3", `同批次归档候选 · ${change.source_conversation.title}`), node("p", `批次：${change.archive_id}`, "meta preserve-text"));
+          if (pending.length) {
+            group.append(node("p", "请先逐条拒绝不想应用的项，再合并确认全部剩余项。单条确认仍可用，但可能使同批次其他项发生版本冲突。", "hint"));
+            const confirmBatch = node("button", `合并确认剩余 ${pending.length} 项`);
+            confirmBatch.disabled = state.changesBusy;
+            confirmBatch.addEventListener("click", async () => {
+              if (state.changesBusy) return;
+              beginChangesOperation();
+              try {
+                const description = pending.map((row, index) => `${index + 1}. ${describeOperations(row.operations)}\n原始用户消息：${row.source_message.content}\n基于档案版本 ${row.base_version}`).join("\n\n");
+                if (!await confirmAction("合并确认以下全部变更？", `${description}\n\n请核对模型是否正确理解原文及金额单位。一次校验版本并更新档案；同一字段有不同目标值时将拒绝，不会覆盖。`)) {
+                  say("changes-status", "已取消确认，未写入。");
+                  return;
+                }
+                await api(`/profile-change-batches/${encodeURIComponent(change.archive_id)}/confirm`, "POST", {change_ids: pending.map((row) => row.id)});
+                await loadChanges();
+                await loadProfile(true);
+                say("app-status", "批次合并确认成功。档案页如有未保存草稿，请重新读取后核对。", "success");
+              } catch (error) {
+                say("changes-status", `${error.message} 请重新读取候选并核对；不会自动改版本重试。`, "error");
+              } finally { setChangesBusy(false); }
+            });
+            group.append(confirmBatch);
+          }
+          batches.set(change.archive_id, group);
+          $("changes-list").append(group);
+        }
+      }
       for (const change of rows) {
         const card = node("article", undefined, "candidate card");
         const status = {pending: "待确认", confirmed: "已确认", rejected: "已拒绝"}[change.status];
-        card.append(node("h3", status), node("p", describeOperations(change.operations), "preserve-text"), node("p", `来源会话：${change.source_conversation.title}`), node("blockquote", change.source_message.content, "preserve-text"), node("p", `基于档案版本 ${change.base_version} · 创建于 ${time(change.created_at)}`, "meta"));
+        card.append(node("h3", status), node("p", "拟写入值（金额为币种基本单位，请与原文核对）：", "hint"), node("p", describeOperations(change.operations), "preserve-text"), node("p", `来源会话：${change.source_conversation.title}`), node("blockquote", change.source_message.content, "preserve-text"), node("p", `基于档案版本 ${change.base_version} · 创建于 ${time(change.created_at)}`, "meta"));
         if (change.processed_at) card.append(node("p", `处理时间：${time(change.processed_at)}${change.applied_version === null ? "" : ` · 应用后版本 ${change.applied_version}`}`, "meta"));
         if (change.status === "pending") {
           const actions = node("div", undefined, "actions");
           const confirm = node("button", "确认修改"); const reject = node("button", "拒绝此变更", "secondary");
+          confirm.disabled = state.changesBusy; reject.disabled = state.changesBusy;
           const handle = async (action) => {
-            confirm.disabled = true; reject.disabled = true;
-            let processed = false;
+            if (state.changesBusy) return;
+            beginChangesOperation();
             try {
-              if (action === "confirm" && !await confirmAction("确认应用以下修改？", `${describeOperations(change.operations)}\n\n来源：${change.source_message.content}\n\n仅在确认后写入当前档案；旧版本冲突将拒绝保存。`)) return;
+              if (action === "confirm" && !await confirmAction("确认应用以下修改？", `${describeOperations(change.operations)}\n\n原始用户消息：${change.source_message.content}\n\n请核对模型是否正确理解原文及金额单位。仅在确认后写入当前档案；旧版本冲突将拒绝保存。`)) {
+                say("changes-status", "已取消确认，未写入。");
+                return;
+              }
               await api(`/profile-changes/${encodeURIComponent(change.id)}/${action}`, "POST", {});
-              processed = true;
               actions.remove();
               card.querySelector("h3").textContent = action === "confirm" ? "已确认" : "已拒绝";
               await loadChanges();
               if (action === "confirm") await loadProfile(true);
               say("app-status", action === "confirm" ? "变更已确认。档案页如有未保存草稿，请重新读取后核对。" : "候选已拒绝，当前档案未改变。", "success");
             } catch (error) { say("changes-status", error.message, "error"); }
-            finally { if (!processed) { confirm.disabled = false; reject.disabled = false; } }
+            finally { setChangesBusy(false); }
           };
           confirm.addEventListener("click", () => handle("confirm")); reject.addEventListener("click", () => handle("reject"));
           actions.append(confirm, reject); card.append(actions);
         }
-        $("changes-list").append(card);
+        (batches.get(change.archive_id) || $("changes-list")).append(card);
       }
       say("changes-status", `已读取 ${rows.length} 条候选记录。`);
     } catch (error) { if (ticket === state.changesRequest) say("changes-status", error.message, "error"); }
