@@ -77,11 +77,17 @@ python -B -m unittest discover -s tests -v
 
 首次克隆或拉取包含数据库迁移的代码后，在使用业务服务前先执行 `python -m flask --app app:create_app init-db`；已有库会在需要升级时自动备份，不要删库重建。SP/CA 演示和模拟行情均须显式填充，Web 启动不会自动写入。首次上手、已有库升级、`md-refresh`/`md-show` 的完整步骤见 [README](README.md#模拟行情与已有库升级)，只改文档无需初始化数据库。
 
-默认 mock 可离线运行，仅需 Flask；离线测试不需要安装 AKShare/pandas。启用真实模式前检查 `python -m pip show akshare`，缺少时按 [README 安装说明](README.md#安装与运行) 安装锁定的 1.20.18，并使用 constraints.txt 保留已验证平台的完整运行时间接依赖版本，勿批量升级环境；平台范围和更新方式以 README 为准。按 [README 真实日线步骤](README.md#akshare-真实日线切换刷新与查看) 在启动服务的同一终端设置 MD_PROVIDER_ID，停止旧服务后重启并重载网页。`md-refresh`/`md-show` 跟随当前配置，`md-refresh-real` 仅本次显式刷新真实数据、不切换网页；读缓存不联网。真实数据为日线收盘或正式单位净值，允许交易日/公布延迟；失败保留旧缓存，请低频使用。T06 沿用结构版本 2，无需新迁移或重填 SP/CA。
+行情默认 mock 可离线运行。模型调用使用官方 OpenAI SDK 2.8.1，按 requirements 与 constraints 安装，完整离线测试也需 SDK，但不需要真实密钥或外网。真实行情仍使用 AKShare 1.20.18，模式及缓存步骤见 [README](README.md#akshare-真实日线切换刷新与查看)，勿批量升级环境。T05 的 003 迁移将已有版本 2 升级至 3，执行 init-db 会先备份；不重填 SP/CA、不删库。
 
 首页和健康检查不需要 API 密钥或外网。用 `Ctrl+C` 停止；端口冲突时用 `python run.py --port 5001`，访问和检查时同样换端口。只改文档无需安装全部运行依赖；检查 Markdown、链接以及与实际代码一致的命令即可。更多路径与迁移说明见 [README](README.md)。
 
-首页现已提供四个业务页签。发送消息只保存原文，尚无模型回答；验证档案修改、删除或候选处理时请使用独立副本，保护开发数据。页面使用、隔离副本命令和人工浏览器检查步骤统一见 [README 网页使用](README.md#网页使用)，HTTP 调用契约见 [docs/API.md](docs/API.md)。
+首页现已提供四个业务页签。聊天发送会保存用户原文并请求模型、保存助手回复；失败保留原问题并提供明确重试，不会自动更新档案、摘要或候选。验证聊天或档案修改时请使用虚构数据和独立副本，保护开发数据。步骤见 [README 网页使用](README.md#网页使用)，HTTP 契约见 [docs/API.md](docs/API.md)。
+
+模型配置按 [README 模型聊天与连通检查](README.md#百炼模型聊天与连通检查t05) 创建项目外私密 JSON，再在项目根目录 config.local.json 中填写自己的 llm_config_file 路径；本机文件已忽略，不含密钥或模型地址。启动 `python run.py` 后到“对话记录”发送；独立检查仍为 `python -B -m app.llm_check`。PFC_LLM_CONFIG_FILE 可临时覆盖路径，显式错误不回退。发送、明确重试和连通检查会产生费用；普通启动、GET 和自动测试不会调用。重试失败问题用原消息旁的按钮，结果未知先读取会话，勿新发相同问题。换电脑时调整路径，不使用 setx、不共享真实配置；并发范围及验收结果以 README 为准。
+
+## 换行与模型调试
+
+仓库文本以 LF 保存，允许 Windows 工作目录使用 CRLF。修改现有文件保留原换行，新建文本用 LF，同一文件内不混用；不为统一换行批量重写文件，不擅自修改组员的全局 Git 或编辑器设置。可按需查看模型输入、上下文和回复进行调试；使用虚构数据和忽略的 runtime 记录，真实 API Key 仅由程序内部读取和认证使用，不主动查看或输出。
 
 不要提交真实密钥、`.env`、`config.local.*`、`library/` 背景资料或 `runtime/` 运行数据和数据库。新克隆的仓库不包含各成员自己的本地数据。需要共享测试样例时使用明确标注的合成数据，必要的迁移 SQL 和数据生成脚本可正常提交。
 

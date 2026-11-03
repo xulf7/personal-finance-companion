@@ -128,13 +128,17 @@ class Store:
         with self._session() as conn:
             return [dict(row) for row in conn.execute("SELECT * FROM conversations ORDER BY created_at, id")]
 
-    def add_message(self, conversation_id, role, content):
+    def add_message(self, conversation_id, role, content, *, _chat_attempt=None):
         conversation_id = identifier(conversation_id)
         if role not in ("user", "assistant", "system", "tool"):
             raise ValidationError("消息角色须为 user、assistant、system 或 tool")
         content = text(content, "消息内容")
         with self._session(write=True) as conn:
             _one(conn, "conversations", conversation_id)
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_requests'").fetchone():
+                pending = conn.execute("SELECT attempt_id FROM chat_requests WHERE conversation_id=? AND status!='succeeded'", (conversation_id,)).fetchone()
+                if pending and pending["attempt_id"] != _chat_attempt:
+                    raise InvalidState("当前会话有未完成聊天，请等待或明确重试原问题")
             sequence = conn.execute(
                 "SELECT COALESCE(MAX(sequence),0)+1 FROM messages WHERE conversation_id=?", (conversation_id,)
             ).fetchone()[0]
@@ -153,6 +157,16 @@ class Store:
             return [dict(row) for row in conn.execute(
                 "SELECT * FROM messages WHERE conversation_id=? ORDER BY sequence", (conversation_id,)
             )]
+
+    def recent_messages(self, conversation_id, *, before_sequence, limit=12):
+        conversation_id = identifier(conversation_id)
+        if type(limit) is not int or not 0 <= limit <= 50 or type(before_sequence) is not int or before_sequence < 1:
+            raise ValidationError("近期消息范围无效")
+        with self._session() as conn:
+            _one(conn, "conversations", conversation_id)
+            rows = conn.execute("SELECT * FROM messages WHERE conversation_id=? AND sequence<? AND role IN ('user','assistant') ORDER BY sequence DESC LIMIT ?",
+                                (conversation_id, before_sequence, limit)).fetchall()
+            return [dict(row) for row in reversed(rows)]
 
     def save_summary(self, conversation_id, first_message_id, last_message_id, content):
         conversation_id = identifier(conversation_id)

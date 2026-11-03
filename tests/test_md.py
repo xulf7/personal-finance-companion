@@ -62,7 +62,7 @@ class MDMigrationTests(StorageCase):
             seed_demo(self.database)
         return old
 
-    def test_real_v1_to_v2_upgrade_preserves_all_sp_ca_and_has_valid_backup(self):
+    def test_real_v1_to_current_upgrade_preserves_all_sp_ca_and_has_valid_backup(self):
         self.old_database()
         before = sp_ca_snapshot(self.database)
         provider = CountingProvider()
@@ -70,7 +70,7 @@ class MDMigrationTests(StorageCase):
             MDService(self.database, provider=provider).query(STOCK.asset_id, STOCK.metric)
         self.assertEqual(provider.calls, 0)
         result = self.initialize()
-        self.assertEqual(result["version"], 2)
+        self.assertEqual(result["version"], len(db.migration_files()))
         self.assertEqual(sp_ca_snapshot(self.database), before)
         self.assertEqual(sp_ca_snapshot(result["backup"]), before)
         with closing(sqlite3.connect(result["backup"])) as conn:
