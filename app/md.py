@@ -134,6 +134,8 @@ class MDService:
         except ValidationError as exc:
             return self._failure(asset, "invalid_response", str(exc))
         except Exception as exc:
+            if getattr(getattr(exc, "response", None), "status_code", None) == 429:
+                return self._failure(asset, "rate_limit", "上游行情接口限流，本次未刷新；请稍后明确重试")
             return self._failure(asset, "provider_error", f"提供器获取失败：{exc}")
         try:
             quote = normalize_quote(payload, asset, self.provider_id, self.is_simulated)

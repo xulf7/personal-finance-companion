@@ -14,7 +14,7 @@
       <p>管理当前财务档案，保留对话与决策依据，查看市场数据。</p></div>
       <a class="health" href="{{ url_for('pages.health') }}">健康检查</a>
     </header>
-    <p class="notice">发送、归档或明确重试会调用外部模型、可能计费；归档可生成历史摘要、跨会话记忆及待确认候选，确认前不改档案。聊天行情工具尚未实现。行情默认使用虚构样例，可显式选择 AKShare 日线数据。</p>
+    <p class="notice">发送、归档或明确重试会调用外部模型、可能计费；聊天可按需查历史摘要、查行情和计算储蓄目标。归档可生成待确认候选，确认前不改档案。行情默认虚构样例，可显式选择 AKShare 日线，均非实时行情。尚未实现流式回复、交易或后台自动归档。</p>
     <nav class="tabs" role="tablist" aria-label="业务导航">
       <button id="tab-profile" role="tab" aria-selected="true" aria-controls="panel-profile" data-tab="profile">财务档案</button>
       <button id="tab-chat" role="tab" aria-selected="false" aria-controls="panel-chat" tabindex="-1" data-tab="chat">对话记录</button>
@@ -57,7 +57,7 @@
       <label class="session-picker">当前会话<select id="conversation-select" disabled><option value="">请选择会话</option></select></label>
       <p id="chat-status" role="status" aria-live="polite"></p>
       <div id="messages" class="messages" aria-label="历史消息"></div>
-      <form id="message-form"><label>用户问题<textarea id="message-text" rows="3" required maxlength="4000" disabled></textarea></label><p class="hint">发送时提供当前档案、历史决策概览和本会话近期消息。模型尚无聊天行情工具；不会自动修改档案、摘要或候选。失败请重试原问题，避免重新发送。</p><button id="message-send" type="submit" disabled>发送并获取回复</button></form>
+      <form id="message-form"><label>用户问题<textarea id="message-text" rows="3" required maxlength="4000" disabled></textarea></label><p class="hint">发送时提供当前档案、历史概览和近期消息；按需查历史摘要、当前目录行情或计算固定月存入目标（不计收益）。不会自动修改档案、摘要或候选。多次模型调用可能增加等待与费用；失败请重试原问题，避免重新发送。</p><button id="message-send" type="submit" disabled>发送并获取回复</button></form>
       <div class="actions"><button id="archive-generate" type="button" class="secondary" disabled>生成归档摘要</button></div>
       <p id="archive-status" role="status" aria-live="polite">选择会话后检查可归档范围。</p>
       <details><summary>查看会话摘要</summary><p class="hint">摘要中的“当时确认”属于历史记录，当前状态请以财务档案为准。</p><div id="summaries"></div></details>
